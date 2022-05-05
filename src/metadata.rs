@@ -1,8 +1,9 @@
 use serde::de::{self};
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
-use std::fmt;
 use std::marker::PhantomData;
+use std::str::FromStr;
+use std::{f32, fmt};
 
 #[derive(Deserialize, Debug)]
 pub struct Metadata {
@@ -26,7 +27,7 @@ pub struct Metadata {
     pub youtube_url: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug)]
 pub enum Attribute {
     String {
         trait_type: String,
@@ -74,6 +75,99 @@ impl Attribute {
     }
 }
 
+impl<'de> Deserialize<'de> for Attribute {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Field {
+            #[serde(rename = "display_type")]
+            DisplayType,
+            #[serde(rename = "trait_type")]
+            TraitType,
+            Value,
+            #[serde(rename = "max_value")]
+            MaxValue,
+        }
+
+        struct DurationVisitor;
+
+        impl<'de> Visitor<'de> for DurationVisitor {
+            type Value = Attribute;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("enum Attribute")
+            }
+
+            fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Attribute, V::Error> {
+                let mut display_type = None;
+                let mut trait_type = None;
+                let mut value: Option<String> = None;
+                let mut max_value = None;
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::DisplayType => {
+                            if display_type.is_some() {
+                                return Err(de::Error::duplicate_field("display_type"));
+                            }
+                            display_type = Some(map.next_value()?);
+                        }
+                        Field::TraitType => {
+                            if trait_type.is_some() {
+                                return Err(de::Error::duplicate_field("trait_type"));
+                            }
+                            trait_type = Some(map.next_value()?);
+                        }
+                        Field::Value => {
+                            if value.is_some() {
+                                return Err(de::Error::duplicate_field("value"));
+                            }
+                            value = Some(map.next_value()?);
+                        }
+                        Field::MaxValue => {
+                            if max_value.is_some() {
+                                return Err(de::Error::duplicate_field("max_value"));
+                            }
+                            max_value = Some(map.next_value()?);
+                        }
+                    }
+                }
+                let display_type = display_type.map_or("", |t| t);
+                let trait_type =
+                    trait_type.ok_or_else(|| de::Error::missing_field("trait_type"))?;
+                let value = value.ok_or_else(|| de::Error::missing_field("value"))?;
+                Ok(match display_type {
+                    "number" => Attribute::Number {
+                        trait_type,
+                        value: usize::from_str(&value).expect("could not convert value to number"),
+                        max_value,
+                    },
+                    "boost_percentage" => Attribute::BoostPercentage {
+                        trait_type,
+                        value: f32::from_str(&value).expect("could not convert value to number"),
+                        max_value,
+                    },
+                    "boost_number" => Attribute::BoostNumber {
+                        trait_type,
+                        value: f32::from_str(&value).expect("could not convert value to number"),
+                        max_value,
+                    },
+                    "date" => Attribute::Date {
+                        trait_type,
+                        value: usize::from_str(&value).expect("could not convert value to number"),
+                    },
+                    &_ => Attribute::String { trait_type, value },
+                })
+            }
+        }
+
+        const FIELDS: &'static [&'static str] = &["secs", "nanos"];
+        deserializer.deserialize_struct("Duration", FIELDS, DurationVisitor)
+    }
+}
+
 fn sequence_or_map<'de, D>(deserializer: D) -> Result<Vec<Attribute>, D::Error>
 where
     D: Deserializer<'de>,
@@ -92,10 +186,7 @@ where
             formatter.write_str("sequence or map")
         }
 
-        fn visit_seq<A>(self, seq: A) -> Result<Self::Value, A::Error>
-        where
-            A: SeqAccess<'de>,
-        {
+        fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Self::Value, A::Error> {
             Deserialize::deserialize(de::value::SeqAccessDeserializer::new(seq))
         }
 

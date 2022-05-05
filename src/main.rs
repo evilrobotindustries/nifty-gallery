@@ -7,8 +7,10 @@ mod metadata;
 
 #[derive(Routable, PartialEq, Clone, Debug)]
 pub enum Route {
-    #[at("/explorer")]
-    Explorer,
+    #[at("/address")]
+    Address,
+    #[at("/collection")]
+    Collection,
     #[at("/")]
     Home,
     #[not_found]
@@ -40,7 +42,7 @@ impl Component for Model {
                 <footer class="footer">
                     <div class="content has-text-centered">
                         { "Powered by " }
-                        <a href="https://evilrobot.industries">{ "Evil Robot Industries" }</a>
+                        <a href="https://evilrobot.industries" target="_blank">{ "Evil Robot Industries" }</a>
                     </div>
                 </footer>
             </BrowserRouter>
@@ -50,8 +52,11 @@ impl Component for Model {
 
 fn switch(routes: &Route) -> Html {
     match routes.clone() {
-        Route::Explorer => {
-            html! { <components::explorer::Model /> }
+        Route::Address => {
+            html! { <components::explorers::Address /> }
+        }
+        Route::Collection => {
+            html! { <components::explorers::Collection /> }
         }
         Route::Home => {
             html! { <components::Home /> }

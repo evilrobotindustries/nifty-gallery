@@ -1,0 +1,7 @@
+{
+  "build": {
+    "image": "evilrobotindustries/wasm",
+    "command": "trunk build --release=true",
+    "publicDir": "dist"
+  }
+}

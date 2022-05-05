@@ -1,3 +1,84 @@
-.navbar-brand .navbar-item {
+:root {
+    --accent: #707070;
+    --accent-hover: #5C5C5C;
+    --danger: #9a1a1e;
+}
+
+body {
     font-family: 'Montserrat', sans-serif;
+}
+
+.navbar-menu {
+    font-family: 'Montserrat', sans-serif;
+    font-size: 0.85em;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.navbar-descriptor {
+    font-weight: normal;
+}
+
+.navbar-brand {
+    font-family: 'Archivo Black', sans-serif;
+    font-size: 1.5em;
+    text-transform: uppercase;
+}
+
+a.navbar-item:hover, a.navbar-item:focus {
+    background-color: transparent;
+    color: var(--accent);
+}
+
+.button {
+    border-radius: 0;
+}
+
+.button.is-primary {
+    background-color: var(--accent);
+}
+
+.button.is-primary[disabled] {
+    background-color: var(--accent);
+}
+
+.button.is-primary:hover, .button.is-primary:active  {
+    background-color: var(--accent-hover);
+}
+
+.button.is-primary:focus  {
+    box-shadow: none !important;
+}
+
+.field-label {
+    max-width: 30px;
+}
+
+.footer {
+    font-family: 'Montserrat', sans-serif;
+    font-size: 0.8em;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    padding: 3rem 1.5rem;
+    text-transform: uppercase;
+}
+
+.notification.is-danger {
+    /*background-color: var(--danger);*/
+}
+
+.footer a {
+    color: #9a1a1e;
+}
+
+.section.is-fullheight {
+    min-height: 100vh;
+}
+
+.tag {
+    font-size: 0.8rem;
+}
+
+.tags.has-addons .tag:not(:first-child) {
+    font-weight: bold;
 }
