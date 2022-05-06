@@ -5,6 +5,9 @@ use yew_router::prelude::*;
 mod components;
 mod metadata;
 
+#[global_allocator]
+static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
+
 #[derive(Routable, PartialEq, Clone, Debug)]
 pub enum Route {
     #[at("/address")]
@@ -41,8 +44,11 @@ impl Component for Model {
                 </main>
                 <footer class="footer">
                     <div class="content has-text-centered">
-                        { "Powered by " }
-                        <a href="https://evilrobot.industries" target="_blank">{ "Evil Robot Industries" }</a>
+                        <p>{"© 2022 Nifty Gallery"}</p>
+                        <p>
+                            { "Site by " }<a href="https://evilrobot.industries" target="_blank">{ "Evil Robot \
+                            Industries" }</a>
+                        </p>
                     </div>
                 </footer>
             </BrowserRouter>

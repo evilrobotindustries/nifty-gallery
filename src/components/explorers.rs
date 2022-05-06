@@ -1,10 +1,9 @@
-use crate::metadata::Metadata;
 use gloo_console::{debug, error};
 use gloo_net::http::Request;
 use gloo_net::Error;
 use itertools::Itertools;
+use qrcode_generator::QrCodeEcc;
 use std::collections::HashMap;
-use std::future::Future;
 use std::str::FromStr;
 use url::{ParseError, Url};
 use web_sys::HtmlInputElement;
@@ -226,41 +225,43 @@ impl Component for Collection {
             .map_or("".to_string(), |u| u.to_string());
         html! {
                 <section class="section is-fullheight">
-                    <div class="field is-horizontal">
-                        <div class="field-label is-normal">
-                            <label class="label">{"URL"}</label>
-                        </div>
-                        <div class="field-body">
-                            <div class="field">
-                                <div class={classes!("control", "has-icons-left",
-                                    self.requesting_metadata.then(|| Some("is-loading")))}>
-                                    <input class="input" type="text" placeholder="Enter token URL" value={ uri }
-                                           onchange={ uri_change } disabled={ self.requesting_metadata } />
-                                    <span class="icon is-small is-left">
-                                        <i class="fas fa-globe"></i>
-                                    </span>
-                                </div>
+                    <div class="form">
+                        <div class="field is-horizontal">
+                            <div class="field-label is-normal">
+                                <label class="label">{"URL"}</label>
                             </div>
-                            if self.metadata.is_some() {
-                                <div class="field has-addons">
-                                  <div class="control">
-                                    <button class="button is-primary" onclick={ previous_click }
-                                            disabled={ self.requesting_metadata || self.current_token == self.start_token }>
-                                        <span class="icon is-small">
-                                          <i class="fas fa-angle-left"></i>
+                            <div class="field-body">
+                                <div class="field">
+                                    <div class={classes!("control", "has-icons-left",
+                                        self.requesting_metadata.then(|| Some("is-loading")))}>
+                                        <input class="input" type="text" placeholder="Enter token URL" value={ uri }
+                                               onchange={ uri_change } disabled={ self.requesting_metadata } />
+                                        <span class="icon is-small is-left">
+                                            <i class="fas fa-globe"></i>
                                         </span>
-                                    </button>
-                                  </div>
-                                  <div class="control">
-                                    <button class="button is-primary" onclick={ next_click }
-                                            disabled={ self.requesting_metadata } >
-                                        <span class="icon is-small">
-                                          <i class="fas fa-angle-right"></i>
-                                        </span>
-                                    </button>
-                                  </div>
+                                    </div>
                                 </div>
-                            }
+                                if self.metadata.is_some() {
+                                    <div class="field has-addons">
+                                      <div class="control">
+                                        <button class="button is-primary" onclick={ previous_click }
+                                                disabled={ self.requesting_metadata || self.current_token == self.start_token }>
+                                            <span class="icon is-small">
+                                              <i class="fas fa-angle-left"></i>
+                                            </span>
+                                        </button>
+                                      </div>
+                                      <div class="control">
+                                        <button class="button is-primary" onclick={ next_click }
+                                                disabled={ self.requesting_metadata } >
+                                            <span class="icon is-small">
+                                              <i class="fas fa-angle-right"></i>
+                                            </span>
+                                        </button>
+                                      </div>
+                                    </div>
+                                }
+                            </div>
                         </div>
                     </div>
 
@@ -271,7 +272,8 @@ impl Component for Collection {
                     }
 
                     if self.metadata.is_some() {
-                        { super::explorers::render(self.metadata.as_ref().unwrap(), self.base_uri.as_ref()) }
+                        <Metadata
+                            ..MetadataProps::from(self.metadata.as_ref().unwrap(), self.base_uri.as_ref()) />
                     }
                     else {
                         if !self.requesting_metadata && self.current_token != self.start_token {
@@ -286,26 +288,6 @@ impl Component for Collection {
                 </section>
         }
     }
-}
-
-fn render(metadata: &Metadata, base_uri: Option<&String>) -> Html {
-    let image = if metadata.image.starts_with(".") {
-        parse_uri(base_uri.unwrap())
-            .unwrap()
-            .join(&metadata.image)
-            .unwrap()
-            .to_string()
-    } else {
-        parse_uri(&metadata.image).unwrap().to_string()
-    };
-
-    super::explorers::metadata(&MetadataProps {
-        name: metadata.name.clone(),
-        description: metadata.description.clone(),
-        image,
-        attributes: metadata.attributes.iter().map(|a| a.map()).collect(),
-        external_url: None,
-    })
 }
 
 fn parse_uri(uri: &str) -> Result<Url, ParseError> {
@@ -334,10 +316,48 @@ pub struct MetadataProps {
     pub image: String,
     pub attributes: HashMap<String, String>,
     pub external_url: Option<String>,
+    pub qr_code: Option<String>,
 }
 
-// #[function_component(Metadata)]
+impl MetadataProps {
+    fn from(metadata: &crate::metadata::Metadata, base_uri: Option<&String>) -> MetadataProps {
+        let image = if metadata.image.starts_with(".") {
+            parse_uri(base_uri.unwrap())
+                .unwrap()
+                .join(&metadata.image)
+                .unwrap()
+                .to_string()
+        } else {
+            parse_uri(&metadata.image).unwrap().to_string()
+        };
+
+        let qr_code =
+            match qrcode_generator::to_png_to_vec(metadata.name.clone(), QrCodeEcc::Low, 128) {
+                Ok(qr_code) => Some(base64::encode(qr_code)),
+                Err(_) => None,
+            };
+
+        MetadataProps {
+            name: metadata.name.clone(),
+            description: metadata.description.clone(),
+            image,
+            attributes: metadata.attributes.iter().map(|a| a.map()).collect(),
+            external_url: None,
+            qr_code,
+        }
+    }
+}
+
+#[function_component(Metadata)]
 fn metadata(props: &MetadataProps) -> yew::Html {
+    use_effect(move || {
+        // Wire up full screen image modal
+        let window = web_sys::window().expect("global window does not exists");
+        let document = window.document().expect("expecting a document on window");
+        bulma::add_modals(&document);
+        || ()
+    });
+
     let attributes: Html = props
         .attributes
         .iter()
@@ -353,14 +373,59 @@ fn metadata(props: &MetadataProps) -> yew::Html {
             }
         })
         .collect();
+
+    let traits = props.attributes.iter().filter(|a| a.1 != "None").count();
+
+    let qr_code = props
+        .qr_code
+        .as_ref()
+        .map(|base64| format!("data:image/png;base64,{base64}"));
+
     html! {
-        <>
-            <h1 class="title">{ &props.name }</h1>
-            <div class="content">{ &props.description }</div>
-            <div class="field is-grouped is-grouped-multiline">{ attributes }</div>
-            <figure class="image">
-                <img src={ props.image.clone() } />
-            </figure>
-        </>
+        // todo: better layout
+        // todo: click image for full screen modal
+        // todo: add qr code
+        <div class="card columns">
+            <div class="column">
+                <figure class="image">
+                    <img src={ props.image.clone() } alt={ props.name.clone() } class="modal-button" data-target="nifty-image" />
+                </figure>
+                <div id="nifty-image" class="modal modal-fx-3dFlipHorizontal">
+                    <div class="modal-background"></div>
+                    <div class="modal-content">
+                        <p class="image">
+                            <img src={ props.image.clone() } alt={ props.name.clone() } />
+                        </p>
+                    </div>
+                    <button class="modal-close is-large" aria-label="close"></button>
+                </div>
+            </div>
+            <div class="column">
+                <div class="card-content">
+                    <h1 class="title">{ &props.name }</h1>
+                    <div class="content">{ &props.description }</div>
+                    <div class="field is-grouped is-grouped-multiline">{ attributes }</div>
+                </div>
+                <footer class="card-footer">
+                    <div class="card-content level is-mobile">
+                        <div class="level-left">
+                            <div class="level-item has-text-centered">
+                                <div>
+                                    <p class="heading">{"Traits"}</p>
+                                    <p class="title">{ traits }</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="level-right">
+                            if qr_code.is_some() {
+                                <figure class="image is-qr-code level-item">
+                                    <img src={ qr_code.unwrap() } />
+                                </figure>
+                            }
+                        </div>
+                    </div>
+                </footer>
+            </div>
+        </div>
     }
 }

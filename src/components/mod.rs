@@ -19,6 +19,14 @@ pub fn home() -> yew::Html {
 
 #[function_component(Navigation)]
 pub fn nav() -> yew::Html {
+    use_effect(move || {
+        let window = web_sys::window().expect("global window does not exists");
+        let document = window.document().expect("expecting a document on window");
+        // Add navigation listeners
+        bulma::add_navigation_listeners(&document);
+        || ()
+    });
+
     html! {
         <nav class="navbar" role="navigation" aria-label="main navigation">
             <div class="navbar-brand">
