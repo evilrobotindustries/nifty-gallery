@@ -3,13 +3,15 @@ use std::str;
 use std::str::FromStr;
 use url::{ParseError, Url};
 
+#[derive(Debug)]
 pub struct Uri {
-    pub base_uri: String,
-    pub token: usize,
+    uri: String,
+    pub token: Option<usize>,
+    pub encoded: bool,
 }
 
 impl Uri {
-    pub fn parse(input: &str) -> Result<Uri, ParseError> {
+    pub fn parse(input: &str, encode: bool) -> Result<Uri, ParseError> {
         let mut url = Url::parse(input)?;
         if url.scheme() == "ipfs" {
             // Convert IPFS protocol address to IPFS gateway
@@ -32,14 +34,22 @@ impl Uri {
             .expect("could not get path segments from url")
             .collect();
 
-        let token = segments.last().unwrap();
-        let uri = url.to_string();
-        let base_uri = uri[..uri.len() - token.len()].to_string();
-        let token = usize::from_str(token).unwrap_or(0);
+        let mut uri = url.to_string();
+        let mut token = None;
+        if let Some(segment) = segments.last() {
+            if let Ok(t) = usize::from_str(segment) {
+                uri = uri[..uri.len() - segment.len()].to_string();
+                token = Some(t);
+            }
+        }
 
+        if encode {
+            uri = Uri::encode(&uri)
+        }
         Ok(Uri {
-            base_uri: Uri::encode(&base_uri),
+            uri,
             token,
+            encoded: encode,
         })
     }
 
@@ -53,5 +63,22 @@ impl Uri {
 
     pub fn encode(input: &str) -> String {
         base64::encode_config(input, base64::URL_SAFE_NO_PAD)
+    }
+
+    pub fn join(&self, input: &str) -> Uri {
+        let uri = Url::parse(&self.uri)
+            .unwrap()
+            .join(input)
+            .unwrap()
+            .to_string();
+        Uri {
+            uri,
+            encoded: self.encoded,
+            token: None,
+        }
+    }
+
+    pub fn to_string(&self) -> &str {
+        &self.uri
     }
 }

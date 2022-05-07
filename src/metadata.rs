@@ -20,6 +20,8 @@ pub struct Metadata {
     pub attributes: Vec<Attribute>,
     // Background color of the item on OpenSea. Must be a six-character hexadecimal without a pre-pended #.
     pub background_color: Option<String>,
+    //
+    pub created_by: Option<String>,
     // A URL to a multi-media attachment for the item. The file extensions GLTF, GLB, WEBM, MP4, M4V, OGV, and OGG are supported, along with the audio-only extensions MP3, WAV, and OGA.
     // Animation_url also supports HTML pages, allowing you to build rich experiences and interactive NFTs using JavaScript canvas, WebGL, and more. Scripts and relative paths within the HTML page are now supported. However, access to browser extensions is not supported.
     pub animation_url: Option<String>,

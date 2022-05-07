@@ -4,6 +4,14 @@
     --danger: #9a1a1e;
 }
 
+a {
+    color: var(--accent);
+}
+
+a:hover {
+    color: var(--accent-hover);
+}
+
 body {
     font-family: 'Montserrat', sans-serif;
 }

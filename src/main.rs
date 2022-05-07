@@ -15,15 +15,17 @@ static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 pub enum Route {
     #[at("/address")]
     Address,
-    // #[at("/c")]
+    // #[at("/c/:uri")]
     // Collection,
-    #[at("/c/:id/:token")]
-    CollectionToken { id: String, token: usize },
+    #[at("/c/:uri/:token")]
+    CollectionToken { uri: String, token: usize },
     #[at("/")]
     Home,
     #[not_found]
     #[at("/404")]
     NotFound,
+    #[at("/t/:uri")]
+    Token { uri: String },
 }
 
 struct Model {}
@@ -69,14 +71,23 @@ fn switch(routes: &Route) -> Html {
         // Route::Collection => {
         //     html! { <components::explorers::Collection /> }
         // }
-        Route::CollectionToken { id, token } => {
-            html! { <components::explorers::Collection {id} {token} /> }
+        Route::CollectionToken { uri, token } => {
+            let uri = uri::Uri::decode(&uri).unwrap_or(uri);
+            html! { <components::explorers::Collection {uri} {token} /> }
         }
         Route::Home => {
             html! { <components::Home /> }
         }
         Route::NotFound => {
             html! { <components::NotFound /> }
+        }
+        Route::Token { uri } => {
+            let uri = uri::Uri::decode(&uri).unwrap_or(uri);
+            html! {
+                <section class="section is-fullheight">
+                    <components::token::Token {uri} />
+                </section>
+            }
         }
     }
 }

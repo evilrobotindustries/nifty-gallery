@@ -1,4 +1,5 @@
 pub mod explorers;
+pub mod token;
 
 use crate::{uri, Route};
 use web_sys::HtmlInputElement;
@@ -11,12 +12,22 @@ pub fn home() -> yew::Html {
     let uri_change = Callback::from(move |e: Event| {
         let input: HtmlInputElement = e.target_unchecked_into();
         let value = input.value();
-        match uri::Uri::parse(&value) {
-            Ok(uri) => history.clone().push(Route::CollectionToken {
-                id: uri.base_uri,
-                token: uri.token,
-            }),
-            Err(_) => {}
+        match uri::Uri::parse(&value, true) {
+            Ok(uri) => {
+                if let Some(token) = uri.token {
+                    history.clone().push(Route::CollectionToken {
+                        uri: uri.to_string().into(),
+                        token,
+                    })
+                } else {
+                    history.clone().push(Route::Token {
+                        uri: uri.to_string().into(),
+                    })
+                }
+            }
+            Err(_) => {
+                todo!()
+            }
         }
     });
 
