@@ -26,7 +26,13 @@ body {
 }
 
 .card .modal-content {
-    width: 75%;
+    width: 90vh;
+    max-width: 90vw;
+}
+
+.card .image {
+    background-color: whitesmoke;
+    height: 100%;
 }
 
 .image.is-qr-code {
@@ -47,7 +53,7 @@ body {
 
 .navbar-brand {
     font-family: 'Archivo Black', sans-serif;
-    font-size: 1.5em;
+    font-size: 2em;
     text-transform: uppercase;
 }
 

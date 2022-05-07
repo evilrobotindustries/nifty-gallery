@@ -1,9 +1,12 @@
+extern crate core;
+
 use gloo_console::error;
 use yew::prelude::*;
 use yew_router::prelude::*;
 
 mod components;
 mod metadata;
+mod uri;
 
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
@@ -12,8 +15,10 @@ static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 pub enum Route {
     #[at("/address")]
     Address,
-    #[at("/collection")]
-    Collection,
+    // #[at("/c")]
+    // Collection,
+    #[at("/c/:id/:token")]
+    CollectionToken { id: String, token: usize },
     #[at("/")]
     Home,
     #[not_found]
@@ -61,8 +66,11 @@ fn switch(routes: &Route) -> Html {
         Route::Address => {
             html! { <components::explorers::Address /> }
         }
-        Route::Collection => {
-            html! { <components::explorers::Collection /> }
+        // Route::Collection => {
+        //     html! { <components::explorers::Collection /> }
+        // }
+        Route::CollectionToken { id, token } => {
+            html! { <components::explorers::Collection {id} {token} /> }
         }
         Route::Home => {
             html! { <components::Home /> }
