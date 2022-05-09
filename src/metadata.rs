@@ -8,9 +8,9 @@ use std::{f32, fmt};
 #[derive(Deserialize, Debug)]
 pub struct Metadata {
     // Name of the item.
-    pub name: String,
+    pub name: Option<String>,
     // A human readable description of the item. Markdown is supported.
-    pub description: String,
+    pub description: Option<String>,
     /// This is the URL to the image of the item. Can be just about any type of image (including SVGs, which will be cached into PNGs by OpenSea), and can be IPFS URLs or paths. We recommend using a 350 x 350 image.
     pub image: String,
     // This is the URL that will appear below the asset's image on OpenSea and will allow users to leave OpenSea and view the item on your site.

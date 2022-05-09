@@ -20,6 +20,7 @@ pub enum Msg {
 pub struct Props {
     // The token uri
     pub uri: String,
+    pub token: Option<usize>,
     #[prop_or_default]
     pub status: Callback<Status>,
 }
@@ -67,6 +68,15 @@ impl Token {
         }
     }
 
+    fn description(&self) -> &str {
+        self.metadata.as_ref().map_or("", |metadata| {
+            metadata
+                .description
+                .as_ref()
+                .map_or("", |description| description)
+        })
+    }
+
     fn image(&self, ctx: &Context<Token>) -> Option<String> {
         match &self.metadata {
             None => None,
@@ -90,6 +100,18 @@ impl Token {
                 }
             }
         }
+    }
+
+    fn name(&self, ctx: &Context<Token>) -> String {
+        self.metadata.as_ref().map_or("".to_string(), |metadata| {
+            metadata.name.as_ref().map_or(
+                // Use token number for missing name (if available)
+                ctx.props()
+                    .token
+                    .map_or("".to_string(), |token| token.to_string()),
+                |name| name.to_string(),
+            )
+        })
     }
 
     fn qr_code(&self) -> Option<String> {
@@ -174,7 +196,7 @@ impl Component for Token {
         true
     }
 
-    fn view(&self, _ctx: &Context<Self>) -> Html {
+    fn view(&self, ctx: &Context<Self>) -> Html {
         html! {
             <>
                 if let Some(error) = &self.error {
@@ -185,7 +207,7 @@ impl Component for Token {
 
                 if let Some(metadata) = self.metadata.as_ref() {
                     <div class="card columns">
-                        if let Some(image) = self.image(_ctx) {
+                        if let Some(image) = self.image(ctx) {
                             <div class="column">
                                 <figure class="image">
                                     <img src={ image.clone() } alt={ metadata.name.clone() } class="modal-button"
@@ -204,8 +226,8 @@ impl Component for Token {
                         }
                         <div class="column">
                             <div class="card-content">
-                                <h1 class="title">{ &metadata.name }</h1>
-                                <div class="content">{ &metadata.description }</div>
+                                <h1 class="title">{ self.name(ctx) }</h1>
+                                <div class="content">{ self.description() }</div>
                                 <div class="field is-grouped is-grouped-multiline">{ self.attributes() }</div>
                                 if let Some(external_url) = &metadata.external_url {
                                     <div class="content">

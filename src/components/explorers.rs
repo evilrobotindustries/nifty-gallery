@@ -119,7 +119,7 @@ impl Component for Collection {
                     </div>
                 </div>
 
-                <Token uri={ self.token_uri.clone() } {status} />
+                <Token uri={ self.token_uri.clone() } token={ ctx.props().token } {status} />
 
                 if matches!(self.token_status, Status::NotFound) && ctx.props().token != self.start_token {
                     <article class="message is-primary">
