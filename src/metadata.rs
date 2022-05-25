@@ -1,11 +1,15 @@
+use chrono::{DateTime, Utc};
+use gloo_console::debug;
 use serde::de::{self};
 use serde::de::{MapAccess, SeqAccess, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 use std::marker::PhantomData;
 use std::str::FromStr;
 use std::{f32, fmt};
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug, Serialize)]
 pub struct Metadata {
     // Name of the item.
     pub name: Option<String>,
@@ -27,9 +31,12 @@ pub struct Metadata {
     pub animation_url: Option<String>,
     // A URL to a YouTube video.
     pub youtube_url: Option<String>,
+
+    pub uri: Option<String>,
+    pub last_viewed: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Attribute {
     String {
         trait_type: String,
@@ -38,24 +45,24 @@ pub enum Attribute {
     // Numeric
     Number {
         trait_type: String,
-        value: usize,
+        value: i64,
         max_value: Option<usize>,
     },
     BoostPercentage {
         trait_type: String,
-        value: f32,
+        value: f64,
         max_value: Option<usize>,
     },
     BoostNumber {
         trait_type: String,
-        value: f32,
+        value: f64,
         max_value: Option<usize>,
     },
     // Date
     Date {
         trait_type: String,
         // A unix timestamp (seconds)
-        value: usize,
+        value: u64,
     },
 }
 
@@ -73,6 +80,77 @@ impl Attribute {
                 trait_type, value, ..
             } => (trait_type.to_string(), value.to_string()),
             Attribute::Date { trait_type, value } => (trait_type.to_string(), value.to_string()),
+        }
+    }
+}
+
+const BOOST_NUMBER: &str = "boost_number";
+const BOOST_PERCENTAGE: &str = "boost_percentage";
+const DATE: &str = "date";
+const DISPLAY_TYPE: &str = "display_type";
+const MAX_VALUE: &str = "max_value";
+const NUMBER: &str = "number";
+const TRAIT_TYPE: &str = "trait_type";
+const VALUE: &str = "value";
+
+impl Serialize for Attribute {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Attribute::String { trait_type, value } => {
+                let mut s = serializer.serialize_struct("Attribute", 2)?;
+                s.serialize_field(TRAIT_TYPE, trait_type)?;
+                s.serialize_field(VALUE, value)?;
+                s.end()
+            }
+            Attribute::Number {
+                trait_type,
+                value,
+                max_value,
+            } => {
+                let mut s = serializer.serialize_struct("Attribute", 4)?;
+                s.serialize_field(DISPLAY_TYPE, NUMBER)?;
+                s.serialize_field(TRAIT_TYPE, trait_type)?;
+                s.serialize_field(VALUE, value)?;
+                if let Some(max_value) = max_value {
+                    s.serialize_field(MAX_VALUE, max_value)?
+                }
+                s.end()
+            }
+            Attribute::BoostPercentage {
+                trait_type,
+                value,
+                max_value,
+            } => {
+                let mut s = serializer.serialize_struct("Attribute", 4)?;
+                s.serialize_field(DISPLAY_TYPE, BOOST_PERCENTAGE)?;
+                s.serialize_field(TRAIT_TYPE, trait_type)?;
+                s.serialize_field(VALUE, value)?;
+                if let Some(max_value) = max_value {
+                    s.serialize_field(MAX_VALUE, max_value)?
+                }
+                s.end()
+            }
+            Attribute::BoostNumber {
+                trait_type,
+                value,
+                max_value,
+            } => {
+                let mut s = serializer.serialize_struct("Attribute", 4)?;
+                s.serialize_field(DISPLAY_TYPE, BOOST_PERCENTAGE)?;
+                s.serialize_field(TRAIT_TYPE, trait_type)?;
+                s.serialize_field(VALUE, value)?;
+                if let Some(max_value) = max_value {
+                    s.serialize_field(MAX_VALUE, max_value)?
+                }
+                s.end()
+            }
+            Attribute::Date { trait_type, value } => {
+                let mut s = serializer.serialize_struct("Attribute", 3)?;
+                s.serialize_field(DISPLAY_TYPE, DATE)?;
+                s.serialize_field(TRAIT_TYPE, trait_type)?;
+                s.serialize_field(VALUE, value)?;
+                s.end()
+            }
         }
     }
 }
@@ -106,61 +184,70 @@ impl<'de> Deserialize<'de> for Attribute {
             fn visit_map<V: MapAccess<'de>>(self, mut map: V) -> Result<Attribute, V::Error> {
                 let mut display_type = None;
                 let mut trait_type = None;
-                let mut value: Option<String> = None;
+                let mut value: Option<Value> = None;
                 let mut max_value = None;
                 while let Some(key) = map.next_key()? {
                     match key {
                         Field::DisplayType => {
                             if display_type.is_some() {
-                                return Err(de::Error::duplicate_field("display_type"));
+                                return Err(de::Error::duplicate_field(DISPLAY_TYPE));
                             }
                             display_type = Some(map.next_value()?);
                         }
                         Field::TraitType => {
                             if trait_type.is_some() {
-                                return Err(de::Error::duplicate_field("trait_type"));
+                                return Err(de::Error::duplicate_field(TRAIT_TYPE));
                             }
                             trait_type = Some(map.next_value()?);
                         }
                         Field::Value => {
                             if value.is_some() {
-                                return Err(de::Error::duplicate_field("value"));
+                                return Err(de::Error::duplicate_field(VALUE));
                             }
                             value = Some(map.next_value()?);
                         }
                         Field::MaxValue => {
                             if max_value.is_some() {
-                                return Err(de::Error::duplicate_field("max_value"));
+                                return Err(de::Error::duplicate_field(MAX_VALUE));
                             }
                             max_value = Some(map.next_value()?);
                         }
                     }
                 }
                 let display_type = display_type.map_or("", |t| t);
-                let trait_type =
-                    trait_type.ok_or_else(|| de::Error::missing_field("trait_type"))?;
-                let value = value.ok_or_else(|| de::Error::missing_field("value"))?;
+                let trait_type = trait_type.ok_or_else(|| de::Error::missing_field(TRAIT_TYPE))?;
+                let value = value.ok_or_else(|| de::Error::missing_field(VALUE))?;
                 Ok(match display_type {
-                    "number" => Attribute::Number {
+                    NUMBER => Attribute::Number {
                         trait_type,
-                        value: usize::from_str(&value).expect("could not convert value to number"),
+                        value: value.as_i64().expect("could not convert value to number"),
                         max_value,
                     },
-                    "boost_percentage" => Attribute::BoostPercentage {
+                    BOOST_PERCENTAGE => Attribute::BoostPercentage {
                         trait_type,
-                        value: f32::from_str(&value).expect("could not convert value to number"),
+                        value: value.as_f64().expect("could not convert value to number"),
                         max_value,
                     },
-                    "boost_number" => Attribute::BoostNumber {
+                    BOOST_NUMBER => Attribute::BoostNumber {
                         trait_type,
-                        value: f32::from_str(&value).expect("could not convert value to number"),
+                        value: value.as_f64().expect("could not convert value to number"),
                         max_value,
                     },
-                    "date" => Attribute::Date {
+                    DATE => Attribute::Date {
                         trait_type,
-                        value: usize::from_str(&value).expect("could not convert value to number"),
+                        value: value.as_u64().expect("could not convert value to number"),
                     },
-                    &_ => Attribute::String { trait_type, value },
+                    &_ => {
+                        let value = if value.is_string() {
+                            value
+                                .as_str()
+                                .expect(&format!("could not convert {:?} value to string", value))
+                                .to_string()
+                        } else {
+                            value.to_string()
+                        };
+                        Attribute::String { trait_type, value }
+                    }
                 })
             }
         }

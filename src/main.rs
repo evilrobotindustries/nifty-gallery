@@ -8,13 +8,15 @@ mod components;
 mod metadata;
 mod uri;
 
+type Address = etherscan::Address;
+
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 #[derive(Routable, PartialEq, Clone, Debug)]
 pub enum Route {
-    #[at("/address")]
-    Address,
+    #[at("/a/:address")]
+    Address { address: String },
     // #[at("/c/:uri")]
     // Collection,
     #[at("/c/:uri/:token")]
@@ -52,6 +54,7 @@ impl Component for Model {
                 <footer class="footer">
                     <div class="content has-text-centered">
                         <p>{"© 2022 Nifty Gallery"}</p>
+                        <p>{"Powered by "}<a href="https://etherscan.io">{"Etherscan.io"}</a>{" APIs"}</p>
                         <p>
                             { "Site by " }<a href="https://evilrobot.industries" target="_blank">{ "Evil Robot \
                             Industries" }</a>
@@ -65,8 +68,8 @@ impl Component for Model {
 
 fn switch(routes: &Route) -> Html {
     match routes.clone() {
-        Route::Address => {
-            html! { <components::explorers::Address /> }
+        Route::Address { address } => {
+            html! { <components::explorers::Address {address} /> }
         }
         // Route::Collection => {
         //     html! { <components::explorers::Collection /> }

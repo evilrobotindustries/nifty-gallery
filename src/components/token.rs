@@ -1,12 +1,19 @@
 use crate::components::token;
 use crate::uri::Uri;
+use crate::Route;
 use gloo_console::{debug, error};
 use gloo_net::http::Request;
 use gloo_net::Error;
+use gloo_storage::errors::StorageError;
+use gloo_storage::{LocalStorage, Storage};
 use itertools::Itertools;
 use qrcode_generator::QrCodeEcc;
 use url::ParseError;
+use std::collections::HashMap;
 use yew::prelude::*;
+use yew_router::prelude::*;
+
+const TOKENS: &str = "Tokens:Viewed";
 
 #[derive(Debug)]
 pub enum Msg {
@@ -35,6 +42,7 @@ pub enum Status {
 }
 
 pub struct Token {
+    uri: String,
     // The current location
     location: String,
     error: Option<String>,
@@ -180,6 +188,7 @@ impl Component for Token {
         _ctx.link().send_message(Msg::Request);
 
         Self {
+            uri: _ctx.props().uri.clone(),
             error: None,
             metadata: None,
             location,
@@ -189,10 +198,28 @@ impl Component for Token {
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             Msg::Request => {
+                self.error = None;
                 let uri = ctx.props().uri.clone();
+
+                // Check cache
+                match cache() {
+                    Ok(cache) => {
+                        if let Some(metadata) = cache.get(&uri) {
+                            ctx.link().send_message(Msg::Completed(metadata.clone()));
+                            return true;
+                        }
+                    }
+                    Err(e) => {
+                        if !matches!(e, StorageError::KeyNotFound(_)) {
+                            clear_cache();
+                            error!(format!("{:?}", e))
+                        }
+                    }
+                }
+
                 ctx.link()
                     .send_future(async move { token::request_metadata(&uri).await });
-                self.error = None;
+
                 ctx.props().status.emit(Status::Requesting);
                 true
             }
@@ -203,9 +230,18 @@ impl Component for Token {
                 ctx.props().status.emit(Status::Requesting);
                 true
             }
-            Msg::Completed(metadata) => {
+            Msg::Completed(mut metadata) => {
+                // Update token
                 ctx.props().status.emit(Status::Completed);
-                self.metadata = Some(metadata);
+                self.metadata = Some(metadata.clone());
+
+                // Cache metadata
+                metadata.uri = Some(self.location.clone());
+                metadata.last_viewed = Some(chrono::offset::Utc::now());
+                let mut cache = cache().unwrap_or(HashMap::new());
+                cache.insert(ctx.props().uri.clone(), metadata);
+                LocalStorage::set(TOKENS, cache);
+
                 true
             }
             Msg::Failed(error) => {
@@ -222,8 +258,12 @@ impl Component for Token {
     }
 
     fn changed(&mut self, ctx: &Context<Self>) -> bool {
-        ctx.link().send_message(Msg::Request);
-        true
+        if ctx.props().uri != self.uri {
+            self.uri = ctx.props().uri.clone();
+            ctx.link().send_message(Msg::Request);
+            return true;
+        }
+        false
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
@@ -278,16 +318,26 @@ impl Component for Token {
                         }
                         <div class="column">
                             <div class="card-content">
-                                <h1 class="title">{ self.name(ctx) }</h1>
+                                <h1 class="title nifty-name">{ self.name(ctx) }</h1>
                                 <div class="content">{ self.description() }</div>
                                 <div class="field is-grouped is-grouped-multiline">{ self.attributes() }</div>
                                 if let Some(external_url) = &metadata.external_url {
                                     <div class="content">
                                         <a href={ external_url.to_string() } target="_blank">
-                                            <i class="fa-solid fa-up-right-from-square"></i>
+                                            <i class="fa-solid fa-globe"></i>
                                         </a>
                                     </div>
                                 }
+                                <table class="table">
+                                <tbody>
+                                if let Some(last_viewed) = &metadata.last_viewed {
+                                    <tr>
+                                        <th>{"Last viewed: "}</th>
+                                        <td>{ last_viewed }</td>
+                                    </tr>
+                                }
+                                </tbody>
+                                </table>
                             </div>
                             <footer class="card-footer">
                                 <div class="card-content level is-mobile">
@@ -321,6 +371,14 @@ impl Component for Token {
         let document = window.document().expect("expecting a document on window");
         bulma::add_modals(&document);
     }
+}
+
+fn clear_cache() {
+    LocalStorage::delete(TOKENS)
+}
+
+pub fn cache() -> gloo_storage::Result<HashMap<String, crate::metadata::Metadata>> {
+    LocalStorage::get(TOKENS)
 }
 
 async fn request_metadata(uri: &str) -> Msg {
@@ -371,6 +429,36 @@ async fn request_metadata(uri: &str) -> Msg {
                 }
                 _ => Msg::Failed(format!("Requesting metadata from {uri} failed: {e}")),
             }
+        }
+    }
+}
+
+#[function_component(RecentTokens)]
+pub fn recent_tokens() -> yew::Html {
+    let slides: Option<Vec<Html>> = cache().map_or(None, |recent_tokens| {
+        Some(
+            recent_tokens
+                .values()
+                .into_iter()
+                .map(|t| {
+                    let name = t.name.as_ref().unwrap_or(&"".to_string()).clone();
+                    html! {
+                        <Link<Route> to={Route::CollectionToken {
+                            uri: t.uri.as_ref().unwrap().clone(), token: t.id }}>
+                            <figure class="image">
+                                <img src={ t.image.clone() } alt={ name } />
+                            </figure>
+                        </Link<Route>>
+                    }
+                })
+                .collect(),
+        )
+    });
+    html! {
+        if let Some(slides) = slides {
+            <div id="recent-tokens">
+                { slides }
+            </div>
         }
     }
 }
