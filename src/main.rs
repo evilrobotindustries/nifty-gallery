@@ -1,11 +1,12 @@
 extern crate core;
 
-use gloo_console::error;
+use gloo_console::{debug, error};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
 mod components;
 mod metadata;
+mod models;
 mod uri;
 
 type Address = etherscan::Address;
@@ -75,7 +76,6 @@ fn switch(routes: &Route) -> Html {
         //     html! { <components::explorers::Collection /> }
         // }
         Route::CollectionToken { uri, token } => {
-            let uri = uri::Uri::decode(&uri).unwrap_or(uri);
             html! { <components::explorers::Collection {uri} {token} /> }
         }
         Route::Home => {
@@ -85,10 +85,9 @@ fn switch(routes: &Route) -> Html {
             html! { <components::NotFound /> }
         }
         Route::Token { uri } => {
-            let uri = uri::Uri::decode(&uri).unwrap_or(uri);
             html! {
                 <section class="section is-fullheight">
-                    <components::token::Token {uri} />
+                    <components::token::Token token_uri={uri} />
                 </section>
             }
         }

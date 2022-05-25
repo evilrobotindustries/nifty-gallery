@@ -1,10 +1,9 @@
 use crate::components::token;
 use crate::components::token::{Status, Token};
 use crate::{uri, Route};
-use ethabi::{Error, Function, Param, ParamType};
 use etherscan::contracts::{Contract, ABI};
 use etherscan::Tag;
-use gloo_console::{debug, error, info};
+use gloo_console::{debug, error};
 use gloo_timers::future::sleep;
 use std::str::FromStr;
 use std::time::Duration;
@@ -23,23 +22,23 @@ pub struct Address {
 }
 
 impl Address {
-    pub(crate) fn call_data(&self) -> Option<(String, &Function)> {
+    fn prepare_call(&self) -> Option<(UriType, String, ethabi::Function)> {
         if let Some(contract) = &self.abi {
             if let Ok(base_uri) = contract.function("baseURI") {
-                //debug!(format!("{:?}", base_uri));
+                debug!(format!("{:?}", base_uri));
                 if base_uri.inputs.len() == 0 {
                     if let Ok(encoded) = base_uri.encode_input(&vec![]) {
-                        return Some((hex::encode(&encoded), base_uri));
+                        return Some((UriType::BaseUri, hex::encode(&encoded), base_uri.clone()));
                     }
                 }
             }
-            if let Ok(base_uri) = contract.function("tokenURI") {
-                //debug!(format!("{:?}", base_uri));
-                if base_uri.inputs.len() == 1 {
+            if let Ok(token_uri) = contract.function("tokenURI") {
+                debug!(format!("{:?}", token_uri));
+                if token_uri.inputs.len() == 1 {
                     if let Ok(encoded) =
-                        base_uri.encode_input(&vec![ethabi::token::Token::Uint(0.into())])
+                        token_uri.encode_input(&vec![ethabi::token::Token::Uint(0.into())])
                     {
-                        return Some((hex::encode(&encoded), base_uri));
+                        return Some((UriType::TokenUri, hex::encode(&encoded), token_uri.clone()));
                     }
                 }
             }
@@ -47,6 +46,37 @@ impl Address {
 
         None
     }
+
+    async fn call(
+        api_key: String,
+        address: etherscan::Address,
+        function: (UriType, String, ethabi::Function),
+    ) -> AddressMsg {
+        let client = etherscan::proxy::Client::new(api_key);
+
+        match client.call(&address, &function.1, Some(Tag::Latest)).await {
+            Ok(result) => {
+                let decoded = hex::decode(&result[2..]).expect("could not decoded the call result");
+                match function.2.decode_output(&decoded) {
+                    Ok(tokens) => {
+                        return AddressMsg::UriResolved(function.0, tokens[0].to_string());
+                    }
+                    Err(e) => {
+                        error!(format!("{:?}", e))
+                    }
+                }
+            }
+            Err(e) => {
+                error!(format!("{:?}", e))
+            }
+        }
+        AddressMsg::NoContract
+    }
+}
+
+pub enum UriType {
+    BaseUri,
+    TokenUri,
 }
 
 pub enum AddressMsg {
@@ -54,7 +84,7 @@ pub enum AddressMsg {
     Contract(Contract),
     NoContract,
     ResolveUri,
-    UriResolved(String),
+    UriResolved(UriType, String),
 }
 
 #[derive(PartialEq, Properties)]
@@ -123,55 +153,49 @@ impl Component for Address {
                     .api_key
                     .as_ref()
                     .map_or("".to_string(), |k| k.clone());
-                let abi = self.abi.as_ref().unwrap().clone();
-                let client = self.client.clone();
                 let address = self.address;
                 let throttle = ctx.props().api_key.as_ref().map_or(THROTTLE_SECONDS, |_| 0);
-                if let Some((call_data, function)) = self.call_data() {
-                    let function = function.clone();
+                if let Some(function) = self.prepare_call() {
                     ctx.link().send_future(async move {
-                        sleep(Duration::from_secs(throttle)).await;
-
-                        let client = etherscan::proxy::Client::new(api_key);
-
-                        match client.call(&address, &call_data, Some(Tag::Latest)).await {
-                            Ok(result) => {
-                                let decoded = hex::decode(&result[2..])
-                                    .expect("could not decoded the call result");
-                                match function.decode_output(&decoded) {
-                                    Ok(tokens) => {
-                                        return AddressMsg::UriResolved(tokens[0].to_string());
-                                    }
-                                    Err(e) => {
-                                        error!(format!("{:?}", e))
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!(format!("{:?}", e))
-                            }
+                        {
+                            sleep(Duration::from_secs(throttle)).await;
+                            Address::call(api_key, address, function).await
                         }
-                        AddressMsg::NoContract
                     });
                 }
 
                 false
             }
-            AddressMsg::UriResolved(uri) => {
-                ctx.link().history().unwrap().push(Route::CollectionToken {
-                    uri: crate::uri::Uri::parse(&uri, true)
-                        .unwrap()
-                        .to_string()
-                        .to_string(),
-                    token: 0,
-                });
+            AddressMsg::UriResolved(uri_type, uri) => {
+                let route = match uri_type {
+                    UriType::BaseUri => {
+                        debug!(format!("base uri resolved: {uri}"));
+                        Route::CollectionToken {
+                            // Encode uri
+                            uri: crate::uri::Uri::encode(&uri),
+                            token: 0,
+                        }
+                    }
+                    UriType::TokenUri => {
+                        debug!(format!("token uri resolved: {uri}"));
+                        let uri = crate::uri::Uri::parse(&uri, true).unwrap();
+                        match uri.token {
+                            None => Route::Token { uri: uri.uri },
+                            Some(token) => Route::CollectionToken {
+                                uri: uri.uri,
+                                token,
+                            },
+                        }
+                    }
+                };
+
+                ctx.link().history().unwrap().push(route);
                 false
             }
         }
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        let name = self.name.as_ref().unwrap_or(&"".to_string()).clone();
         html! {
             <section class="section is-fullheight">
             if let Some(status) = &self.status {
@@ -207,7 +231,7 @@ pub struct Collection {
     error: Option<String>,
     requesting_metadata: bool,
     document: Document,
-    token_uri: String,
+    //token_uri: String,
     token_status_callback: Callback<token::Status>,
     token_status: token::Status,
 }
@@ -238,7 +262,7 @@ impl Component for Collection {
             error: None,
             requesting_metadata: false,
             document,
-            token_uri: format!("{}{}", &_ctx.props().uri, _ctx.props().token),
+            //token_uri: format!("{}{}", &_ctx.props().uri, _ctx.props().token),
             token_status_callback: _ctx.link().callback(|status| Msg::TokenStatus(status)),
             token_status: Status::NotStarted,
         }
@@ -250,7 +274,7 @@ impl Component for Collection {
                 let location = ctx.link().location().unwrap();
                 let route = location.route::<Route>().unwrap();
                 if let Route::CollectionToken { uri, token } = route {
-                    self.token_uri = format!("{}{token}", uri::Uri::decode(&uri).unwrap());
+                    //self.token_uri = format!("{}{token}", uri::Uri::decode(&uri).unwrap());
                 }
                 true
             }
@@ -262,7 +286,6 @@ impl Component for Collection {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        let base_uri_encoded = uri::Uri::encode(&self.base_uri);
         let status = self.token_status_callback.clone();
         let token = ctx.props().token;
 
@@ -282,7 +305,7 @@ impl Component for Collection {
                           <div class="control">
                             if token > 0 {
                                 <Link<Route> classes="button is-primary" to={Route::CollectionToken {
-                                    uri: base_uri_encoded.clone(), token: token - 1 }}
+                                    uri: self.base_uri.clone(), token: token - 1 }}
                                     disabled={ self.requesting_metadata || token == self.start_token }>
                                     <span class="icon is-small">
                                       <i class="fas fa-angle-left"></i>
@@ -292,7 +315,7 @@ impl Component for Collection {
                           </div>
                           <div class="control">
                             <Link<Route> classes="button is-primary" to={Route::CollectionToken {
-                                uri: base_uri_encoded.clone(), token: token + 1 }}
+                                uri: self.base_uri.clone(), token: token + 1 }}
                                 disabled={ self.requesting_metadata }>
                                 <span class="icon is-small">
                                   <i class="fas fa-angle-right"></i>
@@ -303,14 +326,14 @@ impl Component for Collection {
                     </div>
                 </div>
 
-                <Token uri={ self.token_uri.clone() } token={ ctx.props().token } {status} />
+                <Token token_uri={ self.base_uri.clone() } token_id={ ctx.props().token } {status} />
 
                 if matches!(self.token_status, Status::NotFound) && ctx.props().token != self.start_token {
                     <article class="message is-primary">
                         <div class="message-body">
                             {"The requested token was not found. Have you reached the end of the collection? Click "}
                             <Link<Route> to={Route::CollectionToken {
-                                uri: base_uri_encoded, token: self.start_token }}>
+                                uri: self.base_uri.clone(), token: self.start_token }}>
                                 {"here"}
                             </Link<Route>>
                             {" to return to the start of the collection."}

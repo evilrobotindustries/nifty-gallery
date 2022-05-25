@@ -3,6 +3,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Document, Element, KeyboardEvent, NodeList};
 
+pub mod carousel;
+pub mod collapsible;
+
 pub fn add_modals(document: &Document) {
     // Add a click event on buttons to open a specific modal
     if let Ok(modal_buttons) = document.query_selector_all(".modal-button") {

@@ -5,7 +5,7 @@ use url::{ParseError, Url};
 
 #[derive(Debug)]
 pub struct Uri {
-    uri: String,
+    pub uri: String,
     pub token: Option<usize>,
     pub encoded: bool,
 }
