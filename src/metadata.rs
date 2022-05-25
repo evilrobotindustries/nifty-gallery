@@ -1,13 +1,10 @@
-use chrono::{DateTime, Utc};
-use gloo_console::debug;
 use serde::de::{self};
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use std::fmt;
 use std::marker::PhantomData;
-use std::str::FromStr;
-use std::{f32, fmt};
 
 #[derive(Clone, Deserialize, Debug, Serialize)]
 pub struct Metadata {
@@ -31,9 +28,6 @@ pub struct Metadata {
     pub animation_url: Option<String>,
     // A URL to a YouTube video.
     pub youtube_url: Option<String>,
-
-    pub uri: Option<String>,
-    pub last_viewed: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug)]
