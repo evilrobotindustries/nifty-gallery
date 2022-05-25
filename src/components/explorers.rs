@@ -1,24 +1,203 @@
 use crate::components::token;
 use crate::components::token::{Status, Token};
 use crate::{uri, Route};
+use ethabi::{Error, Function, Param, ParamType};
+use etherscan::contracts::{Contract, ABI};
+use etherscan::Tag;
+use gloo_console::{debug, error, info};
+use gloo_timers::future::sleep;
+use std::str::FromStr;
+use std::time::Duration;
 use web_sys::Document;
 use yew::prelude::*;
 use yew_router::prelude::*;
 
-#[function_component(Address)]
-pub fn address() -> yew::Html {
-    html! {}
+const THROTTLE_SECONDS: u64 = 5;
+
+pub struct Address {
+    client: etherscan::Client,
+    address: crate::Address,
+    name: Option<String>,
+    abi: Option<ABI>,
+    status: Option<String>,
+}
+
+impl Address {
+    pub(crate) fn call_data(&self) -> Option<(String, &Function)> {
+        if let Some(contract) = &self.abi {
+            if let Ok(base_uri) = contract.function("baseURI") {
+                //debug!(format!("{:?}", base_uri));
+                if base_uri.inputs.len() == 0 {
+                    if let Ok(encoded) = base_uri.encode_input(&vec![]) {
+                        return Some((hex::encode(&encoded), base_uri));
+                    }
+                }
+            }
+            if let Ok(base_uri) = contract.function("tokenURI") {
+                //debug!(format!("{:?}", base_uri));
+                if base_uri.inputs.len() == 1 {
+                    if let Ok(encoded) =
+                        base_uri.encode_input(&vec![ethabi::token::Token::Uint(0.into())])
+                    {
+                        return Some((hex::encode(&encoded), base_uri));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
+pub enum AddressMsg {
+    RequestContract,
+    Contract(Contract),
+    NoContract,
+    ResolveUri,
+    UriResolved(String),
+}
+
+#[derive(PartialEq, Properties)]
+pub struct AddressProps {
+    pub address: String,
+    pub api_key: Option<String>,
+}
+
+impl Component for Address {
+    type Message = AddressMsg;
+    type Properties = AddressProps;
+
+    fn create(_ctx: &Context<Self>) -> Self {
+        _ctx.link().send_message(AddressMsg::RequestContract);
+
+        let api_key = _ctx
+            .props()
+            .api_key
+            .as_ref()
+            .map_or("".to_string(), |k| k.clone());
+        Self {
+            client: etherscan::Client::new(api_key),
+            address: crate::Address::from_str(&_ctx.props().address).unwrap(),
+            name: None,
+            abi: None,
+            status: None,
+        }
+    }
+
+    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
+        match msg {
+            AddressMsg::RequestContract => {
+                let client = etherscan::contracts::Client::from(self.client.clone());
+                let address = self.address;
+                ctx.link().send_future(async move {
+                    if let Ok(mut contracts) = client.get_source_code(&address).await {
+                        if contracts.len() > 0 {
+                            return AddressMsg::Contract(contracts.remove(0));
+                        }
+                    }
+
+                    AddressMsg::NoContract
+                });
+                self.status = Some(format!(
+                    "Requesting contract for {address} from etherscan.io..."
+                ));
+                true
+            }
+            AddressMsg::Contract(contract) => {
+                self.status = Some(format!(
+                    "Contract for {} found, resolving collection uri...",
+                    &contract.contract_name
+                ));
+                self.name = Some(contract.contract_name);
+                self.abi = Some(contract.abi);
+                ctx.link().send_message(AddressMsg::ResolveUri);
+                true
+            }
+            AddressMsg::NoContract => {
+                self.status = Some(format!("No contract found for {}.", self.address));
+                true
+            }
+            AddressMsg::ResolveUri => {
+                let api_key = ctx
+                    .props()
+                    .api_key
+                    .as_ref()
+                    .map_or("".to_string(), |k| k.clone());
+                let abi = self.abi.as_ref().unwrap().clone();
+                let client = self.client.clone();
+                let address = self.address;
+                let throttle = ctx.props().api_key.as_ref().map_or(THROTTLE_SECONDS, |_| 0);
+                if let Some((call_data, function)) = self.call_data() {
+                    let function = function.clone();
+                    ctx.link().send_future(async move {
+                        sleep(Duration::from_secs(throttle)).await;
+
+                        let client = etherscan::proxy::Client::new(api_key);
+
+                        match client.call(&address, &call_data, Some(Tag::Latest)).await {
+                            Ok(result) => {
+                                let decoded = hex::decode(&result[2..])
+                                    .expect("could not decoded the call result");
+                                match function.decode_output(&decoded) {
+                                    Ok(tokens) => {
+                                        return AddressMsg::UriResolved(tokens[0].to_string());
+                                    }
+                                    Err(e) => {
+                                        error!(format!("{:?}", e))
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!(format!("{:?}", e))
+                            }
+                        }
+                        AddressMsg::NoContract
+                    });
+                }
+
+                false
+            }
+            AddressMsg::UriResolved(uri) => {
+                ctx.link().history().unwrap().push(Route::CollectionToken {
+                    uri: crate::uri::Uri::parse(&uri, true)
+                        .unwrap()
+                        .to_string()
+                        .to_string(),
+                    token: 0,
+                });
+                false
+            }
+        }
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Html {
+        let name = self.name.as_ref().unwrap_or(&"".to_string()).clone();
+        html! {
+            <section class="section is-fullheight">
+            if let Some(status) = &self.status {
+                <article class="message is-success">
+                    <div class="message-body">
+                        { status }
+                    </div>
+                </article>
+
+                if let None = ctx.props().api_key {
+                    <article class="message is-danger">
+                        <div class="message-body">
+                            { format!("Note: No API key has been configured for the etherscan.io API. Requests are \
+                            therefore throttled to a single request every {THROTTLE_SECONDS} seconds.") }
+                        </div>
+                    </article>
+                }
+            }
+            </section>
+        }
+    }
 }
 
 pub enum Msg {
     Navigated,
     TokenStatus(token::Status),
-}
-
-#[derive(PartialEq, Properties)]
-pub struct Props {
-    pub uri: String,
-    pub token: usize,
 }
 
 pub struct Collection {
@@ -33,9 +212,15 @@ pub struct Collection {
     token_status: token::Status,
 }
 
+#[derive(PartialEq, Properties)]
+pub struct CollectionProps {
+    pub uri: String,
+    pub token: usize,
+}
+
 impl Component for Collection {
     type Message = Msg;
-    type Properties = Props;
+    type Properties = CollectionProps;
 
     fn create(_ctx: &Context<Self>) -> Self {
         let window = web_sys::window().expect("global window does not exists");
@@ -67,7 +252,6 @@ impl Component for Collection {
                 if let Route::CollectionToken { uri, token } = route {
                     self.token_uri = format!("{}{token}", uri::Uri::decode(&uri).unwrap());
                 }
-
                 true
             }
             Msg::TokenStatus(status) => {

@@ -1,7 +1,9 @@
 pub mod explorers;
 pub mod token;
 
-use crate::{uri, Route};
+use crate::components::token::RecentTokens;
+use crate::{uri, Address, Route};
+use std::str::FromStr;
 use web_sys::HtmlInputElement;
 use yew::prelude::*;
 use yew_router::prelude::*;
@@ -12,25 +14,27 @@ pub fn home() -> yew::Html {
     let uri_change = Callback::from(move |e: Event| {
         let input: HtmlInputElement = e.target_unchecked_into();
         let value = input.value();
-        match uri::Uri::parse(&value, true) {
-            Ok(uri) => {
-                if let Some(token) = uri.token {
-                    history.clone().push(Route::CollectionToken {
-                        uri: uri.to_string().into(),
-                        token,
-                    })
-                } else {
-                    history.clone().push(Route::Token {
-                        uri: uri.to_string().into(),
-                    })
-                }
+
+        // Check for address
+        if let Ok(address) = Address::from_str(&value) {
+            history.clone().push(Route::Address {
+                address: etherscan::TypeExtensions::format(&address),
+            })
+        } else if let Ok(uri) = uri::Uri::parse(&value, true) {
+            if let Some(token) = uri.token {
+                history.clone().push(Route::CollectionToken {
+                    uri: uri.to_string().into(),
+                    token,
+                })
+            } else {
+                history.clone().push(Route::Token {
+                    uri: uri.to_string().into(),
+                })
             }
-            Err(_) => {
-                todo!()
-            }
+        } else {
+            todo!()
         }
     });
-
     html! {
         <section class="hero is-fullheight">
             <div class="hero-body">
@@ -43,7 +47,10 @@ pub fn home() -> yew::Html {
                             <div class="field-body">
                                 <div class="field has-addons">
                                     <div class="control has-icons-left is-expanded">
-                                        <input class="input" type="text" placeholder="Enter token URL" onchange={ uri_change }/>
+                                        <input class="input"
+                                               type="text"
+                                               placeholder="Enter token URL or contract address"
+                                               onchange={ uri_change }/>
                                         <span class="icon is-small is-left">
                                             <i class="fas fa-globe"></i>
                                         </span>
@@ -57,6 +64,9 @@ pub fn home() -> yew::Html {
                             </div>
                         </div>
                     </div>
+                    <section class="section" style="overflow:hidden">
+                        <RecentTokens />
+                    </section>
                 </div>
             </div>
         </section>

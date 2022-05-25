@@ -111,8 +111,8 @@ a.navbar-item:hover, a.navbar-item:focus {
     padding-bottom: 3rem;
 }
 
-.notification.is-danger {
-    /*background-color: var(--danger);*/
+.nifty-name {
+    font-family: 'Archivo Black', sans-serif;
 }
 
 .section.is-fullheight {

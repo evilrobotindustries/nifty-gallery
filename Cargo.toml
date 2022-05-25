@@ -19,8 +19,13 @@ lto = true
 
 [dependencies]
 base64 = "0.13.0"
+chrono = { version = "0.4.19", features = ["serde", "wasmbind"] }
+ethabi = "17.0.0"
 gloo-console = "0.2.1"
 gloo-net = "0.2.0"
+gloo-storage = "0.2.1"
+gloo-timers = "0.2.4"
+hex = "0.4.3"
 itertools = "0.10.3"
 qrcode-generator = "4.1.6"
 serde = { version = "1.0.137", features = ["derive"] }
@@ -32,4 +37,5 @@ yew = "0.19.3"
 yew-router = "0.16.0"
 yew-router-qs = { git = "https://github.com/evilrobotindustries/yew-router-qs" }
 
+etherscan = { path = "../etherscan" }
 bulma = { path = "bulma" }
