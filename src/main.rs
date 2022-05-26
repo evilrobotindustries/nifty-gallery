@@ -1,9 +1,10 @@
 extern crate core;
 
-use gloo_console::{debug, error};
+use gloo_console::error;
 use yew::prelude::*;
 use yew_router::prelude::*;
 
+mod cache;
 mod components;
 mod metadata;
 mod models;
@@ -70,13 +71,13 @@ impl Component for Model {
 fn switch(routes: &Route) -> Html {
     match routes.clone() {
         Route::Address { address } => {
-            html! { <components::explorers::Address {address} /> }
+            html! { <components::explorers::address::Address {address} /> }
         }
         // Route::Collection => {
         //     html! { <components::explorers::Collection /> }
         // }
         Route::CollectionToken { uri, token } => {
-            html! { <components::explorers::Collection {uri} {token} /> }
+            html! { <components::explorers::collection::Collection {uri} {token} /> }
         }
         Route::Home => {
             html! { <components::Home /> }

@@ -1,26 +1,18 @@
 use crate::components::token;
-use crate::uri::Uri;
-use crate::Route;
+use crate::{cache, uri, Route};
 use bulma::carousel::Options;
-use chrono::DateTime;
 use gloo_console::{debug, error};
 use gloo_net::http::Request;
 use gloo_net::Error;
-use gloo_storage::errors::StorageError;
-use gloo_storage::{LocalStorage, Storage};
-use itertools::{rev, Itertools};
+use itertools::Itertools;
 use qrcode_generator::QrCodeEcc;
-use std::collections::HashMap;
 use yew::prelude::*;
 use yew_router::prelude::*;
-
-const TOKENS: &str = "Tokens:Viewed";
-const CACHE_SIZE: usize = 10;
 
 #[derive(Debug)]
 pub enum Msg {
     Request(crate::models::Token),
-    Redirect(String),
+    Redirect(String, crate::models::Token),
     Completed(crate::models::Token),
     Failed(String),
     NotFound,
@@ -36,6 +28,7 @@ pub struct Props {
     pub status: Callback<Status>,
 }
 
+#[derive(Debug)]
 pub enum Status {
     NotStarted,
     Requesting,
@@ -47,6 +40,8 @@ pub enum Status {
 pub struct Token {
     // The current token
     token: Option<crate::models::Token>,
+    // If applicable, the corresponding collection
+    collection: Option<crate::models::Collection>,
     // Any error, if applicable
     error: Option<String>,
 }
@@ -87,30 +82,29 @@ impl Token {
         })
     }
 
-    fn image(&self, ctx: &Context<Token>) -> Option<String> {
+    fn image(&self) -> Option<String> {
         self.token.as_ref().map_or(None, |token| {
             token.metadata.as_ref().map_or(None, |metadata| {
                 if metadata.image.starts_with(".") {
                     Some(format!("{}{}", token.uri, &metadata.image))
                 } else {
-                    match Uri::parse(&metadata.image, false) {
-                        Ok(uri) => Some(uri.to_string().into()),
-                        Err(e) => {
-                            error!(format!("{:?}", e));
-                            None
-                        }
-                    }
+                    Some(metadata.image.clone())
                 }
             })
         })
     }
 
-    fn name(&self, ctx: &Context<Token>) -> String {
+    fn name(&self) -> String {
         self.token.as_ref().map_or("".to_string(), |token| {
             token.metadata.as_ref().map_or("".to_string(), |metadata| {
                 metadata.name.as_ref().map_or(
                     // Use token number for missing name (if available)
-                    token.id.map_or("".to_string(), |token| token.to_string()),
+                    match &self.collection {
+                        None => token.id.map_or("".to_string(), |token| token.to_string()),
+                        Some(collection) => token.id.map_or("".to_string(), |token| {
+                            format!("{} {}", collection.name, token)
+                        }),
+                    },
                     |name| name.to_string(),
                 )
             })
@@ -152,12 +146,13 @@ impl Component for Token {
 
     fn create(ctx: &Context<Self>) -> Self {
         let token = crate::models::Token::create(
-            Uri::decode(&ctx.props().token_uri).expect("unable to decode the uri"),
+            uri::decode(&ctx.props().token_uri).expect("unable to decode the uri"),
             ctx.props().token_id,
         );
         ctx.link().send_message(Msg::Request(token));
         Self {
             token: None,
+            collection: cache::Collection::get(&ctx.props().token_uri),
             error: None,
         }
     }
@@ -169,64 +164,41 @@ impl Component for Token {
 
                 // Check cache
                 let uri = token.url();
-                match cache() {
-                    Ok(cache) => {
-                        if let Some(token) = cache.get(&uri) {
-                            ctx.link().send_message(Msg::Completed(token.clone()));
-                            return true;
-                        }
-                    }
-                    Err(e) => {
-                        if !matches!(e, StorageError::KeyNotFound(_)) {
-                            clear_cache();
-                            error!(format!("{:?}", e))
-                        }
-                    }
+                if let Some(token) = cache::Token::get(&uri) {
+                    ctx.link().send_message(Msg::Completed(token.clone()));
+                    return true;
                 }
 
+                let url = token.url();
                 ctx.link()
-                    .send_future(async move { token::request_metadata(token).await });
+                    .send_future(async move { token::request_metadata(url, token).await });
 
                 ctx.props().status.emit(Status::Requesting);
                 true
             }
-            Msg::Redirect(uri) => {
-                todo!();
-                // ctx.link()
-                //     .send_future(async move { token::request_metadata(&uri).await });
-                // self.error = None;
-                // ctx.props().status.emit(Status::Requesting);
-                // true
+            Msg::Redirect(url, token) => {
+                ctx.link()
+                    .send_future(async move { token::request_metadata(url, token).await });
+                self.error = None;
+                ctx.props().status.emit(Status::Requesting);
+                true
             }
             Msg::Completed(mut token) => {
                 // Update token
+                if let Some(mut metadata) = token.metadata.as_mut() {
+                    if let Ok(token_uri) = uri::TokenUri::parse(&metadata.image, false) {
+                        metadata.image = match token_uri.token {
+                            None => token_uri.uri,
+                            Some(id) => format!("{}{}", token_uri.uri, id),
+                        }
+                    }
+                }
                 ctx.props().status.emit(Status::Completed);
                 self.token = Some(token.clone());
 
                 // Cache token
                 token.last_viewed = Some(chrono::offset::Utc::now());
-                let mut cache = cache().unwrap_or(HashMap::new());
-                if cache.len() >= CACHE_SIZE {
-                    let expired: Vec<String> = cache
-                        .iter()
-                        .sorted_by_key(|(key, value)| {
-                            value.last_viewed.unwrap_or(chrono::offset::Utc::now())
-                        })
-                        .take(cache.len() - CACHE_SIZE + 1)
-                        .map(|(key, _)| key.clone())
-                        .collect();
-                    for key in expired {
-                        cache.remove(&key);
-                    }
-                }
-                cache.insert(token.url(), token);
-                if let Err(e) = LocalStorage::set(TOKENS, cache) {
-                    error!(format!(
-                        "An error occurred whilst caching the token: {:?}",
-                        e
-                    ))
-                }
-
+                cache::Token::insert(token.url(), token);
                 true
             }
             Msg::Failed(error) => {
@@ -235,6 +207,7 @@ impl Component for Token {
                 true
             }
             Msg::NotFound => {
+                self.token = None;
                 ctx.props().status.emit(Status::NotFound);
                 true
             }
@@ -242,7 +215,7 @@ impl Component for Token {
     }
 
     fn changed(&mut self, ctx: &Context<Self>) -> bool {
-        let uri = Uri::decode(&ctx.props().token_uri).expect("unable to decode the uri");
+        let uri = uri::decode(&ctx.props().token_uri).expect("unable to decode the uri");
         let id = ctx.props().token_id;
         if self.token.is_none()
             || uri != self.token.as_ref().unwrap().uri
@@ -266,7 +239,7 @@ impl Component for Token {
                 if let Some(token) = self.token.as_ref() {
                     if let Some(metadata) = token.metadata.as_ref() {
                         <div class="card columns">
-                            if let Some(image) = self.image(ctx) {
+                            if let Some(image) = self.image() {
                                 <div class="column">
                                     <figure class="image">
                                         <img src={ image.clone() } alt={ metadata.name.clone() } class="modal-button"
@@ -285,7 +258,7 @@ impl Component for Token {
                             }
                             <div class="column">
                                 <div class="card-content">
-                                    <h1 class="title nifty-name">{ self.name(ctx) }</h1>
+                                    <h1 class="title nifty-name">{ self.name() }</h1>
                                     <div class="content">{ self.description() }</div>
                                     <div class="field is-grouped is-grouped-multiline">{ self.attributes() }</div>
                                     if let Some(external_url) = &metadata.external_url {
@@ -341,15 +314,7 @@ impl Component for Token {
     }
 }
 
-fn clear_cache() {
-    LocalStorage::delete(TOKENS)
-}
-
-pub fn cache() -> gloo_storage::Result<HashMap<String, crate::models::Token>> {
-    LocalStorage::get(TOKENS)
-}
-
-async fn request_metadata(mut token: crate::models::Token) -> Msg {
+async fn request_metadata(uri: String, mut token: crate::models::Token) -> Msg {
     let uri = token.url();
     match Request::get(&uri).send().await {
         Ok(response) => match response.status() {
@@ -380,7 +345,7 @@ async fn request_metadata(mut token: crate::models::Token) -> Msg {
                 }
             }
             302 => match response.headers().get("location") {
-                Some(uri) => Msg::Redirect(uri),
+                Some(uri) => Msg::Redirect(uri, token),
                 None => {
                     Msg::Failed("Received 302 Found but location header not present".to_string())
                 }
@@ -412,21 +377,20 @@ pub fn recent_tokens() -> yew::Html {
         bulma::carousel::attach(Some("#recent-tokens"), Some(Options { slides_to_show: 4 }));
         || {}
     });
-    let slides: Option<Vec<Html>> = cache().map_or(None, |recent_tokens| {
+    let slides: Option<Vec<Html>> = cache::Token::values().map_or(None, |recent_tokens| {
         Some(
             recent_tokens
-                .values()
                 .into_iter()
                 .sorted_by_key(|token| token.last_viewed)
                 .rev()
                 .map(|token| {
                     let route = match token.id {
                         Some(id) => Route::CollectionToken {
-                            uri: Uri::encode(&token.uri),
+                            uri: uri::encode(&token.uri),
                             token: id,
                         },
                         None => Route::Token {
-                            uri: Uri::encode(&token.uri),
+                            uri: uri::encode(&token.uri),
                         },
                     };
                     match &token.metadata {

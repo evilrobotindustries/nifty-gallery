@@ -2,16 +2,20 @@ pub mod explorers;
 pub mod token;
 
 use crate::components::token::RecentTokens;
-use crate::{uri, Address, Route};
+use crate::models::Collection;
+use crate::{cache, uri, Address, Route};
+use gloo_console::debug;
+use itertools::Itertools;
 use std::str::FromStr;
-use web_sys::HtmlInputElement;
+use wasm_bindgen::JsCast;
+use web_sys::{HtmlElement, HtmlInputElement, Node};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
 #[function_component(Home)]
 pub fn home() -> yew::Html {
     let history = use_history().unwrap();
-    let uri_change = Callback::from(move |e: Event| {
+    let input_change = Callback::from(move |e: Event| {
         let input: HtmlInputElement = e.target_unchecked_into();
         let value = input.value();
 
@@ -20,7 +24,7 @@ pub fn home() -> yew::Html {
             history.clone().push(Route::Address {
                 address: etherscan::TypeExtensions::format(&address),
             })
-        } else if let Ok(uri) = uri::Uri::parse(&value, true) {
+        } else if let Ok(uri) = uri::TokenUri::parse(&value, true) {
             if let Some(token) = uri.token {
                 history.clone().push(Route::CollectionToken {
                     uri: uri.to_string().into(),
@@ -35,25 +39,80 @@ pub fn home() -> yew::Html {
             todo!()
         }
     });
+    let on_focus_in = Callback::from(move |e: FocusEvent| {
+        let input: HtmlElement = e.target_unchecked_into();
+        input
+            .offset_parent()
+            .expect("could not find element parent")
+            .class_list()
+            .add_1("is-active");
+    });
+    let on_focus_out = Callback::from(move |e: FocusEvent| {
+        let input: HtmlElement = e.target_unchecked_into();
+        let parent = input
+            .offset_parent()
+            .expect("could not find element parent");
+        // Ignore if related target
+        if let Some(event_target) = e.related_target() {
+            if let Some(node) = event_target.dyn_ref::<Node>() {
+                if parent.contains(Some(node)) {
+                    return;
+                }
+            }
+        }
+        parent.class_list().remove_1("is-active");
+    });
+    let collections: Option<Vec<Html>> = cache::Collection::items().map_or(None, |collections| {
+        Some(
+            collections
+                .into_iter()
+                .sorted_by_key(|(_, collection)| collection.name.clone())
+                .map(|collection| {
+                    let route = Route::CollectionToken {
+                        uri: collection.0,
+                        token: collection.1.start_token as usize,
+                    };
+                    html! {
+                        <Link<Route> to={route}>
+                            <div class="dropdown-item">
+                                { collection.1.name }
+                            </div>
+                        </Link<Route>>
+                    }
+                })
+                .collect(),
+        )
+    });
     html! {
         <section class="hero is-fullheight">
             <div class="hero-body">
                 <div class="container has-text-centered">
                     <div class="column is-6 is-offset-3">
                         <p class="subtitle">
-                            { "Welcome to Nifty Gallery, a tool for exploring NFT collections." }
+                            { "Nifty Gallery, a tool for exploring NFT collections." }
                         </p>
                         <div class="field is-horizontal">
                             <div class="field-body">
                                 <div class="field has-addons">
-                                    <div class="control has-icons-left is-expanded">
+                                    <div class="control has-icons-left is-expanded dropdown"
+                                         onfocusin={ on_focus_in }
+                                         onfocusout={ on_focus_out }
+                                         aria-haspopup="true"
+                                         aria-controls="dropdown-menu">
                                         <input class="input"
                                                type="text"
                                                placeholder="Enter token URL or contract address"
-                                               onchange={ uri_change }/>
+                                               onchange={ input_change } />
                                         <span class="icon is-small is-left">
                                             <i class="fas fa-globe"></i>
                                         </span>
+                                        if let Some(collections) = collections {
+                                            <div class="dropdown-menu" id="dropdown-menu" role="menu">
+                                                <div class="dropdown-content">
+                                                    { collections }
+                                                </div>
+                                            </div>
+                                        }
                                     </div>
                                     <div class="control">
                                         <a href="javascript:void(0);" class="button is-primary">
