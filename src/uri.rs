@@ -3,15 +3,27 @@ use std::str;
 use std::str::FromStr;
 use url::{ParseError, Url};
 
+pub fn decode(input: &str) -> Result<String, DecodeError> {
+    Ok(
+        str::from_utf8(&base64::decode_config(input, base64::URL_SAFE_NO_PAD)?)
+            .expect("could not decode utf8 string")
+            .to_string(),
+    )
+}
+
+pub fn encode(input: &str) -> String {
+    base64::encode_config(input, base64::URL_SAFE_NO_PAD)
+}
+
 #[derive(Debug)]
-pub struct Uri {
+pub struct TokenUri {
     pub uri: String,
     pub token: Option<usize>,
     pub encoded: bool,
 }
 
-impl Uri {
-    pub fn parse(input: &str, encode: bool) -> Result<Uri, ParseError> {
+impl TokenUri {
+    pub fn parse(input: &str, encode: bool) -> Result<TokenUri, ParseError> {
         let mut url = Url::parse(input)?;
         if url.scheme() == "ipfs" {
             // Convert IPFS protocol address to IPFS gateway
@@ -44,41 +56,45 @@ impl Uri {
         }
 
         if encode {
-            uri = Uri::encode(&uri)
+            uri = crate::uri::encode(&uri)
         }
-        Ok(Uri {
+        Ok(TokenUri {
             uri,
             token,
             encoded: encode,
         })
     }
 
-    pub fn decode(input: &str) -> Result<String, DecodeError> {
-        Ok(
-            str::from_utf8(&base64::decode_config(input, base64::URL_SAFE_NO_PAD)?)
-                .expect("could not decode utf8 string")
-                .to_string(),
-        )
-    }
-
-    pub fn encode(input: &str) -> String {
-        base64::encode_config(input, base64::URL_SAFE_NO_PAD)
-    }
-
-    pub fn join(&self, input: &str) -> Uri {
-        let uri = Url::parse(&self.uri)
-            .unwrap()
-            .join(input)
-            .unwrap()
-            .to_string();
-        Uri {
-            uri,
-            encoded: self.encoded,
-            token: None,
-        }
-    }
-
     pub fn to_string(&self) -> &str {
         &self.uri
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::uri::TokenUri;
+
+    #[test]
+    fn parses_base_uri() {
+        let uri = "https://api.site.com/token/";
+        let encoded = crate::uri::encode(uri);
+        let uri = TokenUri::parse(uri, true).expect("could not parse uri");
+        assert_eq!(encoded, uri.uri);
+        assert_eq!(None, uri.token);
+        assert!(uri.encoded);
+    }
+
+    #[test]
+    fn parses_ipfs_base_uri() {
+        let uri = "https://ipfs.io/ipfs/QmeSjSinHpPnmXmspMjwiXyN6zS4E9zccariGR3jxcaWtq/";
+        let encoded = crate::uri::encode(uri);
+        let uri = TokenUri::parse(
+            "ipfs://QmeSjSinHpPnmXmspMjwiXyN6zS4E9zccariGR3jxcaWtq/",
+            true,
+        )
+        .expect("could not parse uri");
+        assert_eq!(encoded, uri.uri);
+        assert_eq!(None, uri.token);
+        assert!(uri.encoded);
     }
 }
