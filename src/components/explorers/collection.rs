@@ -1,17 +1,9 @@
 use crate::components::token;
 use crate::components::token::{Status, Token};
-use crate::{cache, models, Route};
-use etherscan::contracts::{Contract, ABI};
-use etherscan::{Tag, TypeExtensions};
-use gloo_console::error;
-use gloo_timers::future::sleep;
-use std::str::FromStr;
-use std::time::Duration;
+use crate::{cache, Route};
 use web_sys::Document;
 use yew::prelude::*;
 use yew_router::prelude::*;
-
-const THROTTLE_SECONDS: u64 = 5;
 
 pub enum Msg {
     Navigated,
@@ -43,7 +35,7 @@ impl Component for Collection {
         let window = web_sys::window().expect("global window does not exists");
         let document = window.document().expect("expecting a document on window");
 
-        let link = _ctx.link().clone();
+        //let link = _ctx.link().clone();
         // let listener = _ctx.link().history().unwrap().listen(move || {
         //     link.send_message(Msg::Navigated);
         // });
@@ -79,10 +71,13 @@ impl Component for Collection {
                         collection.start_token = start_token as u8;
                         cache::Collection::insert(uri.clone(), collection);
                     }
-                    ctx.link().history().unwrap().push(Route::CollectionToken {
-                        uri: uri.clone(),
-                        token: start_token,
-                    });
+                    ctx.link()
+                        .navigator()
+                        .unwrap()
+                        .push(&Route::CollectionToken {
+                            uri: uri.clone(),
+                            token: start_token,
+                        });
                     return false;
                 }
 

@@ -2,9 +2,7 @@ pub mod explorers;
 pub mod token;
 
 use crate::components::token::RecentTokens;
-use crate::models::Collection;
 use crate::{cache, uri, Address, Route};
-use gloo_console::debug;
 use itertools::Itertools;
 use std::str::FromStr;
 use wasm_bindgen::JsCast;
@@ -14,24 +12,24 @@ use yew_router::prelude::*;
 
 #[function_component(Home)]
 pub fn home() -> yew::Html {
-    let history = use_history().unwrap();
+    let navigator = use_navigator().unwrap();
     let input_change = Callback::from(move |e: Event| {
         let input: HtmlInputElement = e.target_unchecked_into();
         let value = input.value();
 
         // Check for address
         if let Ok(address) = Address::from_str(&value) {
-            history.clone().push(Route::Address {
+            navigator.clone().push(&Route::Address {
                 address: etherscan::TypeExtensions::format(&address),
             })
         } else if let Ok(uri) = uri::TokenUri::parse(&value, true) {
             if let Some(token) = uri.token {
-                history.clone().push(Route::CollectionToken {
+                navigator.clone().push(&Route::CollectionToken {
                     uri: uri.to_string().into(),
                     token,
                 })
             } else {
-                history.clone().push(Route::Token {
+                navigator.clone().push(&Route::Token {
                     uri: uri.to_string().into(),
                 })
             }

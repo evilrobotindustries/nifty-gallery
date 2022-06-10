@@ -1,13 +1,9 @@
-use crate::components::token;
-use crate::components::token::{Status, Token};
 use crate::{cache, models, Route};
 use etherscan::contracts::{Contract, ABI};
 use etherscan::{Tag, TypeExtensions};
-use gloo_console::error;
 use gloo_timers::future::sleep;
 use std::str::FromStr;
 use std::time::Duration;
-use web_sys::Document;
 use yew::prelude::*;
 use yew_router::prelude::*;
 
@@ -60,12 +56,12 @@ impl Address {
                         return Some((function.0, tokens[0].to_string()));
                     }
                     Err(e) => {
-                        error!(format!("{:?}", e))
+                        log::error!("{:?}", e)
                     }
                 }
             }
             Err(e) => {
-                error!(format!("{:?}", e))
+                log::error!("{:?}", e)
             }
         }
         None
@@ -198,7 +194,7 @@ impl Component for Address {
                     cache::Collection::insert(token_uri.uri, collection);
                 }
 
-                ctx.link().history().unwrap().push(route);
+                ctx.link().navigator().unwrap().push(&route);
                 false
             }
         }
