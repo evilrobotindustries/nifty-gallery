@@ -5,6 +5,7 @@ use gloo_net::http::Request;
 use gloo_net::Error;
 use itertools::Itertools;
 use qrcode_generator::QrCodeEcc;
+use url::ParseError;
 use yew::prelude::*;
 
 #[derive(Debug)]
@@ -80,25 +81,24 @@ impl Token {
     fn image(&self, ctx: &Context<Token>) -> Option<String> {
         match &self.metadata {
             None => None,
-            Some(metadata) => {
-                if metadata.image.starts_with(".") {
-                    match Uri::parse(&ctx.props().uri, false) {
-                        Ok(uri) => Some(uri.join(&metadata.image).to_string().into()),
-                        Err(e) => {
-                            error!(format!("{:?}", e));
-                            None
+            Some(metadata) => match Uri::parse(&metadata.image, false) {
+                Ok(uri) => Some(uri.to_string().into()),
+                Err(e) => match e {
+                    ParseError::RelativeUrlWithoutBase => {
+                        match Uri::parse(&ctx.props().uri, false) {
+                            Ok(uri) => Some(uri.join(&metadata.image).to_string().into()),
+                            Err(e) => {
+                                error!(format!("{:?}", e));
+                                None
+                            }
                         }
                     }
-                } else {
-                    match Uri::parse(&metadata.image, false) {
-                        Ok(uri) => Some(uri.to_string().into()),
-                        Err(e) => {
-                            error!(format!("{:?}", e));
-                            None
-                        }
+                    _ => {
+                        error!(format!("{:?}", e));
+                        None
                     }
-                }
-            }
+                },
+            },
         }
     }
 
@@ -130,6 +130,37 @@ impl Token {
                 .map(|a| a.map())
                 .filter(|a| a.1 != "None")
                 .count(),
+        }
+    }
+
+    fn video(&self, ctx: &Context<Token>) -> Option<(String, String)> {
+        let poster = self.image(ctx).unwrap_or("".to_string());
+        match &self.metadata {
+            None => None,
+            Some(metadata) => match &metadata.animation_url {
+                None => None,
+                Some(animation_url) => match Uri::parse(animation_url, false) {
+                    Ok(uri) => Some((uri.to_string().into(), poster)),
+                    Err(e) => match e {
+                        ParseError::RelativeUrlWithoutBase => {
+                            match Uri::parse(&ctx.props().uri, false) {
+                                Ok(uri) => {
+                                    debug!(uri.join(&animation_url).to_string());
+                                    Some((uri.join(&animation_url).to_string().into(), poster))
+                                }
+                                Err(e) => {
+                                    error!(format!("{:?}", e));
+                                    None
+                                }
+                            }
+                        }
+                        _ => {
+                            error!(format!("{:?}", e));
+                            None
+                        }
+                    },
+                },
+            },
         }
     }
 }
@@ -207,7 +238,29 @@ impl Component for Token {
 
                 if let Some(metadata) = self.metadata.as_ref() {
                     <div class="card columns">
-                        if let Some(image) = self.image(ctx) {
+                        if let Some((video, poster)) = self.video(ctx) {
+                            <div class="column">
+                                <figure class="image">
+                                    <video class="modal-button" data-target="nifty-image" controls={true}
+                                            poster={ poster.clone() }>
+                                        <source src={ video.clone() } type="video/mp4" />
+                                    </video>
+                                </figure>
+                                <div id="nifty-image" class="modal modal-fx-3dFlipHorizontal">
+                                    <div class="modal-background"></div>
+                                    <div class="modal-content">
+                                        <p class="image">
+                                            <video class="modal-button" data-target="nifty-image" controls={true}
+                                                    poster={ poster }>
+                                                <source src={ video } type="video/mp4" />
+                                            </video>
+                                        </p>
+                                    </div>
+                                    <button class="modal-close is-large" aria-label="close"></button>
+                                </div>
+                            </div>
+                        }
+                        else if let Some(image) = self.image(ctx) {
                             <div class="column">
                                 <figure class="image">
                                     <img src={ image.clone() } alt={ metadata.name.clone() } class="modal-button"
