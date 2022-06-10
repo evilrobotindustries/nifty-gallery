@@ -145,7 +145,6 @@ impl Token {
                         ParseError::RelativeUrlWithoutBase => {
                             match Uri::parse(&ctx.props().uri, false) {
                                 Ok(uri) => {
-                                    debug!(uri.join(&animation_url).to_string());
                                     Some((uri.join(&animation_url).to_string().into(), poster))
                                 }
                                 Err(e) => {
