@@ -1,9 +1,9 @@
 extern crate core;
 
-use gloo_console::error;
 use yew::prelude::*;
 use yew_router::prelude::*;
 
+pub mod agents;
 mod cache;
 mod components;
 mod metadata;
@@ -32,15 +32,15 @@ pub enum Route {
     Token { uri: String },
 }
 
-struct Model {}
+pub struct App {}
 
-impl Component for Model {
+impl Component for App {
     type Message = ();
     type Properties = ();
 
     fn create(_ctx: &Context<Self>) -> Self {
         if let Err(e) = yew_router_qs::try_route_from_query_string() {
-            error!(e)
+            log::error!("{:?}", e)
         }
 
         Self {}
@@ -51,7 +51,7 @@ impl Component for Model {
             <BrowserRouter>
                 <components::Navigation />
                 <main>
-                    <Switch<Route> render={Switch::render(switch)} />
+                    <Switch<Route> render={switch} />
                 </main>
                 <footer class="footer">
                     <div class="content has-text-centered">
@@ -68,7 +68,7 @@ impl Component for Model {
     }
 }
 
-fn switch(routes: &Route) -> Html {
+fn switch(routes: Route) -> Html {
     match routes.clone() {
         Route::Address { address } => {
             html! { <components::explorers::address::Address {address} /> }
@@ -96,5 +96,6 @@ fn switch(routes: &Route) -> Html {
 }
 
 fn main() {
-    yew::start_app::<Model>();
+    wasm_logger::init(wasm_logger::Config::new(log::Level::Trace));
+    yew::Renderer::<App>::new().render();
 }

@@ -1,14 +1,16 @@
+use crate::agents::Response;
 use crate::components::token;
 use crate::{cache, uri, Route};
 use bulma::carousel::Options;
-use gloo_console::{debug, error};
 use gloo_net::http::Request;
 use gloo_net::Error;
 use itertools::Itertools;
 use qrcode_generator::QrCodeEcc;
+use std::rc::Rc;
 use std::collections::HashMap;
 use url::ParseError;
 use yew::prelude::*;
+use yew_agent::{Bridge, Bridged};
 use yew_router::prelude::*;
 
 #[derive(Debug)]
@@ -16,6 +18,7 @@ pub enum Msg {
     Request(crate::models::Token),
     Redirect(String, crate::models::Token),
     Completed(crate::models::Token),
+    Metadata(crate::metadata::Metadata),
     Failed(String),
     NotFound,
 }
@@ -40,12 +43,15 @@ pub enum Status {
 }
 
 pub struct Token {
+    agent: Box<dyn Bridge<crate::agents::Metadata>>,
     // The current token
     token: Option<crate::models::Token>,
     // If applicable, the corresponding collection
     collection: Option<crate::models::Collection>,
     // Any error, if applicable
     error: Option<String>,
+
+    requesting: Option<crate::models::Token>,
 }
 
 impl Token {
@@ -135,8 +141,12 @@ impl Token {
             .href()
             .expect("could not get document location href as string");
 
+        log::trace!("token: generating qr code...");
         match qrcode_generator::to_png_to_vec(&location, QrCodeEcc::Low, 128) {
-            Ok(qr_code) => Some(format!("data:image/png;base64,{}", base64::encode(qr_code))),
+            Ok(qr_code) => {
+                log::trace!("token: qr code generated");
+                Some(format!("data:image/png;base64,{}", base64::encode(qr_code)))
+            }
             Err(_) => None,
         }
     }
@@ -195,10 +205,23 @@ impl Component for Token {
             ctx.props().token_id,
         );
         ctx.link().send_message(Msg::Request(token));
+        let cb = {
+            let link = ctx.link().clone();
+            move |e| match e {
+                Response::Completed(metadata) => {
+                    link.send_message(Self::Message::Metadata(metadata))
+                }
+            }
+        };
+        let agent = crate::agents::Metadata::bridge(Rc::new(cb));
+
         Self {
+            agent,
             token: None,
             collection: cache::Collection::get(&ctx.props().token_uri),
             error: None,
+
+            requesting: None,
         }
     }
 
@@ -208,15 +231,20 @@ impl Component for Token {
                 self.error = None;
 
                 // Check cache
+                log::trace!("token: checking cache");
                 let uri = token.url();
                 if let Some(token) = cache::Token::get(&uri) {
                     ctx.link().send_message(Msg::Completed(token.clone()));
                     return true;
                 }
 
+                log::trace!("token: requesting metadata from agent");
                 let url = token.url();
-                ctx.link()
-                    .send_future(async move { token::request_metadata(url, token).await });
+                self.agent
+                    .send(crate::agents::Request::Metadata { uri: url.clone() });
+                self.requesting = Some(token);
+                // ctx.link()
+                //     .send_future(async move { token::request_metadata(url, token).await });
 
                 ctx.props().status.emit(Status::Requesting);
                 true
@@ -242,8 +270,10 @@ impl Component for Token {
                 self.token = Some(token.clone());
 
                 // Cache token
+                log::trace!("token: adding to cache");
                 token.last_viewed = Some(chrono::offset::Utc::now());
                 cache::Token::insert(token.url(), token);
+                log::trace!("token: cached");
                 true
             }
             Msg::Failed(error) => {
@@ -256,6 +286,15 @@ impl Component for Token {
                 ctx.props().status.emit(Status::NotFound);
                 true
             }
+            Msg::Metadata(metadata) => {
+                if let Some(mut token) = self.requesting.take() {
+                    log::trace!("response completed {:?}", metadata);
+                    token.metadata = Some(metadata);
+                    ctx.link().send_message(Msg::Completed(token));
+                }
+                //ctx.link().send_message(Msg::Completed(metadata))
+                false
+            }
         }
     }
 
@@ -266,6 +305,7 @@ impl Component for Token {
             || uri != self.token.as_ref().unwrap().uri
             || id != self.token.as_ref().unwrap().id
         {
+            log::trace!("token: token changed, requesting metadata...");
             ctx.link()
                 .send_message(Msg::Request(crate::models::Token::create(uri, id)));
         }
@@ -374,6 +414,7 @@ impl Component for Token {
     }
 
     fn rendered(&mut self, _ctx: &Context<Self>, _first_render: bool) {
+        log::trace!("token: rendered");
         // Wire up full screen image modal
         let window = web_sys::window().expect("global window does not exists");
         let document = window.document().expect("expecting a document on window");
@@ -399,14 +440,14 @@ async fn request_metadata(uri: String, mut token: crate::models::Token) -> Msg {
                                 Msg::Completed(token)
                             }
                             Err(e) => {
-                                debug!(format!("{:?}", response));
-                                error!(format!("{:?}", e));
+                                log::trace!("{:?}", response);
+                                log::error!("{:?}", e);
                                 Msg::Failed("An error occurred parsing the metadata".to_string())
                             }
                         }
                     }
                     Err(e) => {
-                        error!(format!("{:?}", e));
+                        log::error!("{:?}", e);
                         Msg::Failed("An error occurred reading the response".to_string())
                     }
                 }
@@ -428,7 +469,7 @@ async fn request_metadata(uri: String, mut token: crate::models::Token) -> Msg {
             match e {
                 Error::JsError(e) => {
                     // Attempt to get status code
-                    error!(format!("{:?}", e));
+                    log::error!("{:?}", e);
                     Msg::Failed(format!("Requesting metadata from {uri} failed: {e}"))
                 }
                 _ => Msg::Failed(format!("Requesting metadata from {uri} failed: {e}")),

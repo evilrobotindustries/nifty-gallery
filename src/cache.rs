@@ -1,4 +1,3 @@
-use gloo_console::error;
 use gloo_storage::errors::StorageError;
 use gloo_storage::{LocalStorage, Storage};
 use itertools::Itertools;
@@ -25,7 +24,7 @@ impl Collection {
             Err(e) => {
                 if !matches!(e, StorageError::KeyNotFound(_)) {
                     Collection::clear();
-                    error!(format!("{:?}", e))
+                    log::error!("{:?}", e)
                 }
                 None
             }
@@ -36,10 +35,7 @@ impl Collection {
         let mut cache = Collection::cache().unwrap_or(HashMap::new());
         cache.insert(key, value);
         if let Err(e) = LocalStorage::set(Collection::STORAGE_KEY, cache) {
-            error!(format!(
-                "An error occurred whilst caching the collection: {:?}",
-                e
-            ))
+            log::error!("An error occurred whilst caching the collection: {:?}", e)
         }
     }
 
@@ -74,7 +70,7 @@ impl Token {
             Err(e) => {
                 if !matches!(e, StorageError::KeyNotFound(_)) {
                     Token::clear();
-                    error!(format!("{:?}", e))
+                    log::error!("{:?}", e)
                 }
                 None
             }
@@ -96,10 +92,7 @@ impl Token {
         }
         cache.insert(key, value);
         if let Err(e) = LocalStorage::set(Token::STORAGE_KEY, cache) {
-            error!(format!(
-                "An error occurred whilst caching the token: {:?}",
-                e
-            ))
+            log::error!("An error occurred whilst caching the token: {:?}", e)
         }
     }
 
