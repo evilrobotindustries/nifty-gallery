@@ -88,32 +88,6 @@ impl Token {
         })
     }
 
-    fn image(&self) -> Option<String> {
-        self.token.as_ref().map_or(None, |token| {
-            token.metadata.as_ref().map_or(None, |metadata| {
-                Some(metadata.image.clone())
-                // match Url::parse(&metadata.image) {
-                //     Ok(url) => Some(url.to_string()),
-                //     Err(e) => match e {
-                //         ParseError::RelativeUrlWithoutBase => {
-                //             match Url::parse(&ctx.props().uri) {
-                //                 Ok(url) => Some(url.join(&metadata.image).to_string()),
-                //                 Err(e) => {
-                //                     error!("{:?}", e);
-                //                     None
-                //                 }
-                //             }
-                //         }
-                //         _ => {
-                //             error!("{:?}", e);
-                //             None
-                //         }
-                //     },
-                // }
-            })
-        })
-    }
-
     fn name(&self) -> String {
         self.token.as_ref().map_or("".to_string(), |token| {
             token.metadata.as_ref().map_or("".to_string(), |metadata| {
@@ -145,35 +119,15 @@ impl Token {
     }
 
     fn video(&self, ctx: &Context<Self>) -> Option<(String, String)> {
-        return None;
-        // self.token.as_ref().map_or(None, |token| {
-        //     token.metadata.as_ref().map_or(None, |metadata| {
-        //         let poster = self.image().unwrap_or("".to_string());
-        //         match &metadata.animation_url {
-        //             None => None,
-        //             Some(animation_url) => match uri::TokenUri::parse(animation_url, false) {
-        //                 Ok(uri) => Some((uri.to_string().into(), poster)),
-        //                 Err(e) => match e {
-        //                     ParseError::RelativeUrlWithoutBase => {
-        //                         match uri::TokenUri::parse(&ctx.props().uri, false) {
-        //                             Ok(token_uri) => {
-        //                                 Some((token_uri.uri.join(&animation_url).to_string().into(), poster))
-        //                             }
-        //                             Err(e) => {
-        //                                 error!("{:?}", e);
-        //                                 None
-        //                             }
-        //                         }
-        //                     }
-        //                     _ => {
-        //                         error!("{:?}", e);
-        //                         None
-        //                     }
-        //                 },
-        //             },
-        //         }
-        //     })
-        // })
+        self.token.as_ref().map_or(None, |token| {
+            token
+                .metadata
+                .as_ref()
+                .map_or(None, |metadata| match &metadata.animation_url {
+                    None => None,
+                    Some(animation_url) => Some((animation_url.clone(), metadata.image.clone())),
+                })
+        })
     }
 }
 
@@ -330,7 +284,7 @@ impl Component for Token {
                 if let Some(token) = self.token.as_ref() {
                     if let Some(metadata) = token.metadata.as_ref() {
                         <div class="card columns">
-                            if let Some((video, poster)) = self.video(ctx) {
+                        if let Some((video, poster)) = self.video(ctx) {
                             <div class="column">
                                 <figure class="image">
                                     <video class="modal-button" data-target="nifty-image" controls={true}
@@ -352,23 +306,23 @@ impl Component for Token {
                                 </div>
                             </div>
                         }
-                        else if let Some(image) = self.image() {
-                                <div class="column">
-                                    <figure class="image">
-                                        <img src={ image.clone() } alt={ metadata.name.clone() } class="modal-button"
-                                             data-target="nifty-image" />
-                                    </figure>
-                                    <div id="nifty-image" class="modal modal-fx-3dFlipHorizontal">
-                                        <div class="modal-background"></div>
-                                        <div class="modal-content">
-                                            <p class="image">
-                                                <img src={ image } alt={ metadata.name.clone() } />
-                                            </p>
-                                        </div>
-                                        <button class="modal-close is-large" aria-label="close"></button>
+                        else {
+                            <div class="column">
+                                <figure class="image">
+                                    <img src={ metadata.image.clone() } alt={ metadata.name.clone() } class="modal-button"
+                                         data-target="nifty-image" />
+                                </figure>
+                                <div id="nifty-image" class="modal modal-fx-3dFlipHorizontal">
+                                    <div class="modal-background"></div>
+                                    <div class="modal-content">
+                                        <p class="image">
+                                            <img src={ metadata.image.clone() } alt={ metadata.name.clone() } />
+                                        </p>
                                     </div>
+                                    <button class="modal-close is-large" aria-label="close"></button>
                                 </div>
-                            }
+                            </div>
+                        }
                             <div class="column">
                                 <div class="card-content">
                                     <h1 class="title nifty-name">{ self.name() }</h1>

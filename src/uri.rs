@@ -15,18 +15,6 @@ pub fn encode(input: &str) -> String {
     base64::encode_config(input, base64::URL_SAFE_NO_PAD)
 }
 
-pub fn decode(input: &str) -> Result<String, DecodeError> {
-    Ok(
-        str::from_utf8(&base64::decode_config(input, base64::URL_SAFE_NO_PAD)?)
-            .expect("could not decode utf8 string")
-            .to_string(),
-    )
-}
-
-pub fn encode(input: &str) -> String {
-    base64::encode_config(input, base64::URL_SAFE_NO_PAD)
-}
-
 #[derive(Debug)]
 pub struct TokenUri {
     pub uri: String,
