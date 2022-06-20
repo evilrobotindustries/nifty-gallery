@@ -1,24 +1,19 @@
-use crate::agents::Response;
-use crate::components::token;
 use crate::{cache, uri, Route};
 use bulma::carousel::Options;
-use gloo_net::http::Request;
-use gloo_net::Error;
 use itertools::Itertools;
-use qrcode_generator::QrCodeEcc;
 use std::rc::Rc;
-use std::collections::HashMap;
-use url::ParseError;
+use workers::{Bridge, Bridged};
 use yew::prelude::*;
-use yew_agent::{Bridge, Bridged};
 use yew_router::prelude::*;
 
 #[derive(Debug)]
 pub enum Msg {
     Request(crate::models::Token),
+    GenerateQRCode,
     Redirect(String, crate::models::Token),
     Completed(crate::models::Token),
-    Metadata(crate::metadata::Metadata),
+    Metadata(workers::metadata::Metadata),
+    QRCode(String),
     Failed(String),
     NotFound,
 }
@@ -43,13 +38,16 @@ pub enum Status {
 }
 
 pub struct Token {
-    agent: Box<dyn Bridge<crate::agents::Metadata>>,
+    metadata_worker: Box<dyn Bridge<workers::metadata::Worker>>,
+    qr_worker: Box<dyn Bridge<workers::qr::Worker>>,
     // The current token
     token: Option<crate::models::Token>,
     // If applicable, the corresponding collection
     collection: Option<crate::models::Collection>,
     // Any error, if applicable
     error: Option<String>,
+    /// The qr code of the current url
+    qr_code: Option<String>,
 
     requesting: Option<crate::models::Token>,
 }
@@ -93,24 +91,25 @@ impl Token {
     fn image(&self) -> Option<String> {
         self.token.as_ref().map_or(None, |token| {
             token.metadata.as_ref().map_or(None, |metadata| {
-                match Uri::parse(&metadata.image, false) {
-                    Ok(uri) => Some(uri.to_string().into()),
-                    Err(e) => match e {
-                        ParseError::RelativeUrlWithoutBase => {
-                            match Uri::parse(&ctx.props().uri, false) {
-                                Ok(uri) => Some(uri.join(&metadata.image).to_string().into()),
-                                Err(e) => {
-                                    error!(format!("{:?}", e));
-                                    None
-                                }
-                            }
-                        }
-                        _ => {
-                            error!(format!("{:?}", e));
-                            None
-                        }
-                    },
-                }
+                Some(metadata.image.clone())
+                // match Url::parse(&metadata.image) {
+                //     Ok(url) => Some(url.to_string()),
+                //     Err(e) => match e {
+                //         ParseError::RelativeUrlWithoutBase => {
+                //             match Url::parse(&ctx.props().uri) {
+                //                 Ok(url) => Some(url.join(&metadata.image).to_string()),
+                //                 Err(e) => {
+                //                     error!("{:?}", e);
+                //                     None
+                //                 }
+                //             }
+                //         }
+                //         _ => {
+                //             error!("{:?}", e);
+                //             None
+                //         }
+                //     },
+                // }
             })
         })
     }
@@ -132,25 +131,6 @@ impl Token {
         })
     }
 
-    fn qr_code(&self) -> Option<String> {
-        let window = web_sys::window().expect("global window does not exists");
-        let document = window.document().expect("expecting a document on window");
-        let location = document
-            .location()
-            .expect("could not get document location")
-            .href()
-            .expect("could not get document location href as string");
-
-        log::trace!("token: generating qr code...");
-        match qrcode_generator::to_png_to_vec(&location, QrCodeEcc::Low, 128) {
-            Ok(qr_code) => {
-                log::trace!("token: qr code generated");
-                Some(format!("data:image/png;base64,{}", base64::encode(qr_code)))
-            }
-            Err(_) => None,
-        }
-    }
-
     fn traits(&self) -> usize {
         self.token.as_ref().map_or(0, |token| {
             token.metadata.as_ref().map_or(0, |metadata| {
@@ -164,34 +144,36 @@ impl Token {
         })
     }
 
-    fn video(&self, ctx: &Context<Token>) -> Option<(String, String)> {
-        let poster = self.image(ctx).unwrap_or("".to_string());
-        match &self.metadata {
-            None => None,
-            Some(metadata) => match &metadata.animation_url {
-                None => None,
-                Some(animation_url) => match Uri::parse(animation_url, false) {
-                    Ok(uri) => Some((uri.to_string().into(), poster)),
-                    Err(e) => match e {
-                        ParseError::RelativeUrlWithoutBase => {
-                            match Uri::parse(&ctx.props().uri, false) {
-                                Ok(uri) => {
-                                    Some((uri.join(&animation_url).to_string().into(), poster))
-                                }
-                                Err(e) => {
-                                    error!(format!("{:?}", e));
-                                    None
-                                }
-                            }
-                        }
-                        _ => {
-                            error!(format!("{:?}", e));
-                            None
-                        }
-                    },
-                },
-            },
-        }
+    fn video(&self, ctx: &Context<Self>) -> Option<(String, String)> {
+        return None;
+        // self.token.as_ref().map_or(None, |token| {
+        //     token.metadata.as_ref().map_or(None, |metadata| {
+        //         let poster = self.image().unwrap_or("".to_string());
+        //         match &metadata.animation_url {
+        //             None => None,
+        //             Some(animation_url) => match uri::TokenUri::parse(animation_url, false) {
+        //                 Ok(uri) => Some((uri.to_string().into(), poster)),
+        //                 Err(e) => match e {
+        //                     ParseError::RelativeUrlWithoutBase => {
+        //                         match uri::TokenUri::parse(&ctx.props().uri, false) {
+        //                             Ok(token_uri) => {
+        //                                 Some((token_uri.uri.join(&animation_url).to_string().into(), poster))
+        //                             }
+        //                             Err(e) => {
+        //                                 error!("{:?}", e);
+        //                                 None
+        //                             }
+        //                         }
+        //                     }
+        //                     _ => {
+        //                         error!("{:?}", e);
+        //                         None
+        //                     }
+        //                 },
+        //             },
+        //         }
+        //     })
+        // })
     }
 }
 
@@ -203,23 +185,26 @@ impl Component for Token {
         let token = crate::models::Token::create(
             uri::decode(&ctx.props().token_uri).expect("unable to decode the uri"),
             ctx.props().token_id,
-        );
+        )
+        .expect("unable to create the token");
+        ctx.link().send_message(Msg::GenerateQRCode);
         ctx.link().send_message(Msg::Request(token));
-        let cb = {
-            let link = ctx.link().clone();
-            move |e| match e {
-                Response::Completed(metadata) => {
-                    link.send_message(Self::Message::Metadata(metadata))
-                }
-            }
-        };
-        let agent = crate::agents::Metadata::bridge(Rc::new(cb));
 
         Self {
-            agent,
+            metadata_worker: workers::metadata::Worker::bridge(Rc::new({
+                let link = ctx.link().clone();
+                move |e: workers::metadata::Response| {
+                    link.send_message(Self::Message::Metadata(e.metadata))
+                }
+            })),
+            qr_worker: workers::qr::Worker::bridge(Rc::new({
+                let link = ctx.link().clone();
+                move |e: workers::qr::Response| link.send_message(Self::Message::QRCode(e.qr_code))
+            })),
             token: None,
             collection: cache::Collection::get(&ctx.props().token_uri),
             error: None,
+            qr_code: None,
 
             requesting: None,
         }
@@ -231,27 +216,27 @@ impl Component for Token {
                 self.error = None;
 
                 // Check cache
-                log::trace!("token: checking cache");
-                let uri = token.url();
-                if let Some(token) = cache::Token::get(&uri) {
+                log::trace!("checking cache");
+                if let Some(token) = cache::Token::get(&token.url.to_string()) {
                     ctx.link().send_message(Msg::Completed(token.clone()));
                     return true;
                 }
 
-                log::trace!("token: requesting metadata from agent");
-                let url = token.url();
-                self.agent
-                    .send(crate::agents::Request::Metadata { uri: url.clone() });
+                log::trace!("requesting metadata from agent");
+                self.metadata_worker.send(workers::metadata::Request {
+                    url: token.url.to_string(),
+                });
                 self.requesting = Some(token);
                 // ctx.link()
                 //     .send_future(async move { token::request_metadata(url, token).await });
 
                 ctx.props().status.emit(Status::Requesting);
+
                 true
             }
             Msg::Redirect(url, token) => {
-                ctx.link()
-                    .send_future(async move { token::request_metadata(url, token).await });
+                // ctx.link()
+                //     .send_future(async move { request_metadata(url, token).await });
                 self.error = None;
                 ctx.props().status.emit(Status::Requesting);
                 true
@@ -270,10 +255,10 @@ impl Component for Token {
                 self.token = Some(token.clone());
 
                 // Cache token
-                log::trace!("token: adding to cache");
+                log::trace!("adding to cache");
                 token.last_viewed = Some(chrono::offset::Utc::now());
-                cache::Token::insert(token.url(), token);
-                log::trace!("token: cached");
+                cache::Token::insert(token.url.to_string(), token);
+                log::trace!("cached");
                 true
             }
             Msg::Failed(error) => {
@@ -295,6 +280,25 @@ impl Component for Token {
                 //ctx.link().send_message(Msg::Completed(metadata))
                 false
             }
+            Msg::GenerateQRCode => {
+                log::trace!("generating qr code...");
+                let window = web_sys::window().expect("global window does not exists");
+                let document = window.document().expect("expecting a document on window");
+                let location = document
+                    .location()
+                    .expect("could not get document location")
+                    .href()
+                    .expect("could not get document location href as string");
+                self.qr_worker.send(workers::qr::Request { url: location });
+
+                self.qr_code = None;
+                true
+            }
+            Msg::QRCode(qr_code) => {
+                log::trace!("qr code generated");
+                self.qr_code = Some(qr_code);
+                true
+            }
         }
     }
 
@@ -302,12 +306,14 @@ impl Component for Token {
         let uri = uri::decode(&ctx.props().token_uri).expect("unable to decode the uri");
         let id = ctx.props().token_id;
         if self.token.is_none()
-            || uri != self.token.as_ref().unwrap().uri
+            || uri != self.token.as_ref().unwrap().url.to_string()
             || id != self.token.as_ref().unwrap().id
         {
-            log::trace!("token: token changed, requesting metadata...");
-            ctx.link()
-                .send_message(Msg::Request(crate::models::Token::create(uri, id)));
+            log::trace!("token changed, requesting metadata...");
+            ctx.link().send_message(Msg::GenerateQRCode);
+            ctx.link().send_message(Msg::Request(
+                crate::models::Token::create(uri, id).expect("unable to create token"),
+            ));
         }
         false
     }
@@ -397,9 +403,9 @@ impl Component for Token {
                                             </div>
                                         </div>
                                         <div class="level-right">
-                                            if let Some(qr_code) = self.qr_code() {
+                                            if let Some(qr_code) = self.qr_code.as_ref() {
                                                 <figure class="image is-qr-code level-item">
-                                                    <img src={ qr_code } alt={ metadata.name.clone() } />
+                                                    <img src={ qr_code.clone() } alt={ metadata.name.clone() } />
                                                 </figure>
                                             }
                                         </div>
@@ -414,7 +420,7 @@ impl Component for Token {
     }
 
     fn rendered(&mut self, _ctx: &Context<Self>, _first_render: bool) {
-        log::trace!("token: rendered");
+        log::trace!("rendered");
         // Wire up full screen image modal
         let window = web_sys::window().expect("global window does not exists");
         let document = window.document().expect("expecting a document on window");
@@ -422,61 +428,61 @@ impl Component for Token {
     }
 }
 
-async fn request_metadata(uri: String, mut token: crate::models::Token) -> Msg {
-    let uri = token.url();
-    match Request::get(&uri).send().await {
-        Ok(response) => match response.status() {
-            200 => {
-                // Read response as text to handle empty result
-                match response.text().await {
-                    Ok(response) => {
-                        if response.len() == 0 {
-                            return Msg::NotFound;
-                        }
-
-                        match serde_json::from_str::<crate::metadata::Metadata>(&response) {
-                            Ok(metadata) => {
-                                token.metadata = Some(metadata);
-                                Msg::Completed(token)
-                            }
-                            Err(e) => {
-                                log::trace!("{:?}", response);
-                                log::error!("{:?}", e);
-                                Msg::Failed("An error occurred parsing the metadata".to_string())
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("{:?}", e);
-                        Msg::Failed("An error occurred reading the response".to_string())
-                    }
-                }
-            }
-            302 => match response.headers().get("location") {
-                Some(uri) => Msg::Redirect(uri, token),
-                None => {
-                    Msg::Failed("Received 302 Found but location header not present".to_string())
-                }
-            },
-            404 => Msg::NotFound,
-            _ => Msg::Failed(format!(
-                "Request failed: {} {}",
-                response.status(),
-                response.status_text()
-            )),
-        },
-        Err(e) => {
-            match e {
-                Error::JsError(e) => {
-                    // Attempt to get status code
-                    log::error!("{:?}", e);
-                    Msg::Failed(format!("Requesting metadata from {uri} failed: {e}"))
-                }
-                _ => Msg::Failed(format!("Requesting metadata from {uri} failed: {e}")),
-            }
-        }
-    }
-}
+// async fn request_metadata(uri: String, mut token: crate::models::Token) -> Msg {
+//     let uri = token.url().unwrap();
+//     match Request::get(&uri).send().await {
+//         Ok(response) => match response.status() {
+//             200 => {
+//                 // Read response as text to handle empty result
+//                 match response.text().await {
+//                     Ok(response) => {
+//                         if response.len() == 0 {
+//                             return Msg::NotFound;
+//                         }
+//
+//                         match serde_json::from_str::<crate::metadata::Metadata>(&response) {
+//                             Ok(metadata) => {
+//                                 token.metadata = Some(metadata);
+//                                 Msg::Completed(token)
+//                             }
+//                             Err(e) => {
+//                                 log::trace!("{:?}", response);
+//                                 log::error!("{:?}", e);
+//                                 Msg::Failed("An error occurred parsing the metadata".to_string())
+//                             }
+//                         }
+//                     }
+//                     Err(e) => {
+//                         log::error!("{:?}", e);
+//                         Msg::Failed("An error occurred reading the response".to_string())
+//                     }
+//                 }
+//             }
+//             302 => match response.headers().get("location") {
+//                 Some(uri) => Msg::Redirect(uri, token),
+//                 None => {
+//                     Msg::Failed("Received 302 Found but location header not present".to_string())
+//                 }
+//             },
+//             404 => Msg::NotFound,
+//             _ => Msg::Failed(format!(
+//                 "Request failed: {} {}",
+//                 response.status(),
+//                 response.status_text()
+//             )),
+//         },
+//         Err(e) => {
+//             match e {
+//                 Error::JsError(e) => {
+//                     // Attempt to get status code
+//                     log::error!("{:?}", e);
+//                     Msg::Failed(format!("Requesting metadata from {uri} failed: {e}"))
+//                 }
+//                 _ => Msg::Failed(format!("Requesting metadata from {uri} failed: {e}")),
+//             }
+//         }
+//     }
+// }
 
 #[function_component(RecentTokens)]
 pub fn recent_tokens() -> yew::Html {
@@ -494,11 +500,11 @@ pub fn recent_tokens() -> yew::Html {
                 .map(|token| {
                     let route = match token.id {
                         Some(id) => Route::CollectionToken {
-                            uri: uri::encode(&token.uri),
+                            uri: uri::encode(&token.url.to_string()),
                             token: id,
                         },
                         None => Route::Token {
-                            uri: uri::encode(&token.uri),
+                            uri: uri::encode(&token.url.to_string()),
                         },
                     };
                     match &token.metadata {

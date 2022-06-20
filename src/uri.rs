@@ -1,7 +1,7 @@
 use base64::DecodeError;
 use std::str;
 use std::str::FromStr;
-use url::{ParseError, Url};
+use workers::{ParseError, Url};
 
 pub fn decode(input: &str) -> Result<String, DecodeError> {
     Ok(

@@ -1,6 +1,11 @@
-use crate::components::token;
-use crate::components::token::{Status, Token};
-use crate::{cache, Route};
+use crate::{
+    cache,
+    components::{
+        token,
+        token::{Status, Token},
+    },
+    Route,
+};
 use web_sys::Document;
 use yew::prelude::*;
 use yew_router::prelude::*;
@@ -71,13 +76,10 @@ impl Component for Collection {
                         collection.start_token = start_token as u8;
                         cache::Collection::insert(uri.clone(), collection);
                     }
-                    ctx.link()
-                        .navigator()
-                        .unwrap()
-                        .push(&Route::CollectionToken {
-                            uri: uri.clone(),
-                            token: start_token,
-                        });
+                    ctx.link().history().unwrap().push(Route::CollectionToken {
+                        uri: uri.clone(),
+                        token: start_token,
+                    });
                     return false;
                 }
 

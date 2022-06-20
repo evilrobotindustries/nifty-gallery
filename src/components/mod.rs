@@ -1,6 +1,3 @@
-pub mod explorers;
-pub mod token;
-
 use crate::components::token::RecentTokens;
 use crate::{cache, uri, Address, Route};
 use itertools::Itertools;
@@ -10,26 +7,44 @@ use web_sys::{HtmlElement, HtmlInputElement, Node};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
+pub mod explorers;
+pub mod token;
+
+#[function_component(Footer)]
+pub fn footer() -> yew::Html {
+    html! {
+        <footer class="footer">
+            <div class="content has-text-centered">
+            <p>{"© 2022 Nifty Gallery"}</p>
+            <p>{"Powered by "}<a href="https://etherscan.io">{"Etherscan.io"}</a>{" APIs"}</p>
+            <p>{ "Site by " }<a href="https://evilrobot.industries" target="_blank">
+                { "Evil Robot Industries" }</a>
+            </p>
+            </div>
+        </footer>
+    }
+}
+
 #[function_component(Home)]
 pub fn home() -> yew::Html {
-    let navigator = use_navigator().unwrap();
+    let history = use_history().unwrap();
     let input_change = Callback::from(move |e: Event| {
         let input: HtmlInputElement = e.target_unchecked_into();
         let value = input.value();
 
         // Check for address
         if let Ok(address) = Address::from_str(&value) {
-            navigator.clone().push(&Route::Address {
+            history.clone().push(Route::Address {
                 address: etherscan::TypeExtensions::format(&address),
             })
         } else if let Ok(uri) = uri::TokenUri::parse(&value, true) {
             if let Some(token) = uri.token {
-                navigator.clone().push(&Route::CollectionToken {
+                history.clone().push(Route::CollectionToken {
                     uri: uri.to_string().into(),
                     token,
                 })
             } else {
-                navigator.clone().push(&Route::Token {
+                history.clone().push(Route::Token {
                     uri: uri.to_string().into(),
                 })
             }

@@ -1,6 +1,7 @@
-use crate::metadata::Metadata;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use workers::metadata::Metadata;
+use workers::{ParseError, Url};
 
 #[derive(Deserialize, Serialize)]
 pub struct Collection {
@@ -11,7 +12,7 @@ pub struct Collection {
 
 #[derive(Clone, Deserialize, Debug, Serialize)]
 pub struct Token {
-    pub uri: String,
+    pub url: Url,
     pub id: Option<usize>,
 
     pub metadata: Option<Metadata>,
@@ -19,17 +20,16 @@ pub struct Token {
 }
 
 impl Token {
-    pub fn create(uri: String, id: Option<usize>) -> Token {
-        Token {
-            uri,
+    pub fn create(uri: String, id: Option<usize>) -> Result<Token, ParseError> {
+        let mut url = Url::parse(&uri)?;
+        if let Some(id) = id {
+            url = url.join(&id.to_string())?;
+        }
+        Ok(Token {
+            url,
             id,
             metadata: None,
             last_viewed: None,
-        }
-    }
-
-    pub(crate) fn url(&self) -> String {
-        self.id
-            .map_or(self.uri.clone(), |id| format!("{}{id}", self.uri))
+        })
     }
 }

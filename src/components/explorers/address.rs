@@ -194,7 +194,7 @@ impl Component for Address {
                     cache::Collection::insert(token_uri.uri, collection);
                 }
 
-                ctx.link().navigator().unwrap().push(&route);
+                ctx.link().history().unwrap().push(route);
                 false
             }
         }

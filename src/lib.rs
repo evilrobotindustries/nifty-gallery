@@ -1,19 +1,14 @@
-extern crate core;
-
 use yew::prelude::*;
 use yew_router::prelude::*;
 
-pub mod agents;
 mod cache;
 mod components;
-mod metadata;
 mod models;
 mod uri;
 
-type Address = etherscan::Address;
+extern crate core;
 
-#[global_allocator]
-static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
+type Address = etherscan::Address;
 
 #[derive(Routable, PartialEq, Clone, Debug)]
 pub enum Route {
@@ -38,7 +33,7 @@ impl Component for App {
     type Message = ();
     type Properties = ();
 
-    fn create(_ctx: &Context<Self>) -> Self {
+    fn create(_: &Context<Self>) -> Self {
         if let Err(e) = yew_router_qs::try_route_from_query_string() {
             log::error!("{:?}", e)
         }
@@ -51,24 +46,15 @@ impl Component for App {
             <BrowserRouter>
                 <components::Navigation />
                 <main>
-                    <Switch<Route> render={switch} />
+                    <Switch<Route> render={Switch::render(switch)} />
                 </main>
-                <footer class="footer">
-                    <div class="content has-text-centered">
-                        <p>{"© 2022 Nifty Gallery"}</p>
-                        <p>{"Powered by "}<a href="https://etherscan.io">{"Etherscan.io"}</a>{" APIs"}</p>
-                        <p>
-                            { "Site by " }<a href="https://evilrobot.industries" target="_blank">{ "Evil Robot \
-                            Industries" }</a>
-                        </p>
-                    </div>
-                </footer>
+                <components::Footer />
             </BrowserRouter>
         }
     }
 }
 
-fn switch(routes: Route) -> Html {
+fn switch(routes: &Route) -> Html {
     match routes.clone() {
         Route::Address { address } => {
             html! { <components::explorers::address::Address {address} /> }
@@ -93,9 +79,4 @@ fn switch(routes: Route) -> Html {
             }
         }
     }
-}
-
-fn main() {
-    wasm_logger::init(wasm_logger::Config::new(log::Level::Trace));
-    yew::Renderer::<App>::new().render();
 }
