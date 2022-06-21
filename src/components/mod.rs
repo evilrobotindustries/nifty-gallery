@@ -4,6 +4,7 @@ use itertools::Itertools;
 use std::str::FromStr;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlInputElement, Node};
+use workers::etherscan::TypeExtensions;
 use yew::prelude::*;
 use yew_router::prelude::*;
 
@@ -35,7 +36,7 @@ pub fn home() -> yew::Html {
         // Check for address
         if let Ok(address) = Address::from_str(&value) {
             history.clone().push(Route::Address {
-                address: etherscan::TypeExtensions::format(&address),
+                address: TypeExtensions::format(&address),
             })
         } else if let Ok(uri) = uri::TokenUri::parse(&value, true) {
             if let Some(token) = uri.token {
@@ -81,9 +82,12 @@ pub fn home() -> yew::Html {
                 .into_iter()
                 .sorted_by_key(|(_, collection)| collection.name.clone())
                 .map(|collection| {
-                    let route = Route::CollectionToken {
-                        uri: collection.0,
-                        token: collection.1.start_token as usize,
+                    let route = match collection.1.address {
+                        Some(address) => Route::Collection { id: address },
+                        None => Route::CollectionToken {
+                            uri: collection.0,
+                            token: collection.1.start_token as usize,
+                        },
                     };
                     html! {
                         <Link<Route> to={route}>

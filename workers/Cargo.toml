@@ -11,9 +11,14 @@ lto = true # link time optimization using using whole-program analysis
 
 [dependencies]
 base64 = "0.13.0"
+ethabi = "17.0.0"
+etherscan = { path = "../../etherscan" }
 gloo-net = "0.2.0"
 gloo-worker = { version = "0.1.0", features = ["futures"] }
+gloo-timers = "0.2.4"
 gloo-utils = "0.1.3"
+hex = "0.4.3"
+instant = { version = "0.1.12", features = ["wasm-bindgen"] }
 js-sys = "0.3.58"
 log = "0.4.17"
 qrcode-generator = "4.1.6"

@@ -14,8 +14,6 @@ base64 = "0.13.0"
 bulma = { path = "bulma" }
 chrono = { version = "0.4.19", features = ["serde", "wasmbind"] }
 console_error_panic_hook = "0.1.7"
-ethabi = "17.0.0"
-etherscan = { path = "../etherscan" }
 gloo-net = "0.2.0"
 gloo-storage = "0.2.1"
 gloo-timers = "0.2.4"

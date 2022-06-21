@@ -1,6 +1,7 @@
 pub use gloo_worker::{Bridge, Bridged, PublicWorker};
 pub use url::{ParseError, Url};
 
+pub mod etherscan;
 pub mod metadata;
 pub mod qr;
 

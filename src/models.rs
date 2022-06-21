@@ -8,6 +8,7 @@ pub struct Collection {
     pub name: String,
     pub address: Option<String>,
     pub start_token: u8,
+    pub base_uri: Option<String>,
 }
 
 #[derive(Clone, Deserialize, Debug, Serialize)]

@@ -118,7 +118,7 @@ impl Token {
         })
     }
 
-    fn video(&self, ctx: &Context<Self>) -> Option<(String, String)> {
+    fn video(&self) -> Option<(String, String)> {
         self.token.as_ref().map_or(None, |token| {
             token
                 .metadata
@@ -189,8 +189,8 @@ impl Component for Token {
                 true
             }
             Msg::Redirect(url, token) => {
-                // ctx.link()
-                //     .send_future(async move { request_metadata(url, token).await });
+                self.metadata_worker
+                    .send(workers::metadata::Request { url });
                 self.error = None;
                 ctx.props().status.emit(Status::Requesting);
                 true
@@ -284,7 +284,7 @@ impl Component for Token {
                 if let Some(token) = self.token.as_ref() {
                     if let Some(metadata) = token.metadata.as_ref() {
                         <div class="card columns">
-                        if let Some((video, poster)) = self.video(ctx) {
+                        if let Some((video, poster)) = self.video() {
                             <div class="column">
                                 <figure class="image">
                                     <video class="modal-button" data-target="nifty-image" controls={true}

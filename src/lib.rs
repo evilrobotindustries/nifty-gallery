@@ -1,3 +1,5 @@
+use std::rc::Rc;
+use workers::{Bridge, Bridged};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
@@ -8,26 +10,11 @@ mod uri;
 
 extern crate core;
 
-type Address = etherscan::Address;
+type Address = workers::etherscan::Address;
 
-#[derive(Routable, PartialEq, Clone, Debug)]
-pub enum Route {
-    #[at("/a/:address")]
-    Address { address: String },
-    // #[at("/c/:uri")]
-    // Collection,
-    #[at("/c/:uri/:token")]
-    CollectionToken { uri: String, token: usize },
-    #[at("/")]
-    Home,
-    #[not_found]
-    #[at("/404")]
-    NotFound,
-    #[at("/t/:uri")]
-    Token { uri: String },
+pub struct App {
+    worker: Box<dyn Bridge<workers::etherscan::Worker>>,
 }
-
-pub struct App {}
 
 impl Component for App {
     type Message = ();
@@ -38,7 +25,11 @@ impl Component for App {
             log::error!("{:?}", e)
         }
 
-        Self {}
+        Self {
+            worker: workers::etherscan::Worker::bridge(Rc::new({
+                move |e: workers::etherscan::Response| {}
+            })),
+        }
     }
 
     fn view(&self, _ctx: &Context<Self>) -> Html {
@@ -54,16 +45,33 @@ impl Component for App {
     }
 }
 
+#[derive(Routable, PartialEq, Clone, Debug)]
+pub enum Route {
+    #[at("/a/:address")]
+    Address { address: String },
+    #[at("/c/:id")]
+    Collection { id: String },
+    #[at("/c/:uri/:token")]
+    CollectionToken { uri: String, token: usize },
+    #[at("/")]
+    Home,
+    #[not_found]
+    #[at("/404")]
+    NotFound,
+    #[at("/t/:uri")]
+    Token { uri: String },
+}
+
 fn switch(routes: &Route) -> Html {
     match routes.clone() {
         Route::Address { address } => {
             html! { <components::explorers::address::Address {address} /> }
         }
-        // Route::Collection => {
-        //     html! { <components::explorers::Collection /> }
-        // }
+        Route::Collection { id } => {
+            html! { <components::explorers::collection::Collection {id} /> }
+        }
         Route::CollectionToken { uri, token } => {
-            html! { <components::explorers::collection::Collection {uri} {token} /> }
+            html! { <components::explorers::collection::CollectionToken {uri} {token} /> }
         }
         Route::Home => {
             html! { <components::Home /> }
