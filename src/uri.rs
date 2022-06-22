@@ -76,7 +76,7 @@ impl TokenUri {
 
 #[cfg(test)]
 mod tests {
-    use crate::uri::{parse, TokenUri};
+    use crate::uri::parse;
 
     #[test]
     fn parses_base_uri() {

@@ -1,3 +1,4 @@
+use crate::components::TOP_COLLECTIONS;
 use crate::{
     cache,
     components::{
@@ -6,11 +7,11 @@ use crate::{
     },
     models, uri, Address, Route,
 };
+use chrono::DateTime;
 use indexmap::IndexMap;
 use std::rc::Rc;
 use std::str::FromStr;
 use web_sys::Document;
-use workers::metadata::Response;
 use workers::{etherscan, metadata, Bridge, Bridged, Url};
 use yew::prelude::*;
 use yew_router::prelude::*;
@@ -35,10 +36,15 @@ pub enum Message {
     RequestTokenUri(Address),
     TokenUri(String, u32),
     UriFailed,
+    // Total Supply
+    RequestTotalSupply(Address),
+    TotalSupply(u32),
     // Metadata
     RequestMetadata(u32),
     Metadata(u32, metadata::Metadata),
     NotFound(u32),
+    // Ignore
+    None,
 }
 
 #[derive(PartialEq, Properties)]
@@ -53,9 +59,9 @@ impl Component for Collection {
     type Properties = Properties;
 
     fn create(ctx: &Context<Self>) -> Self {
-        // Check if collection already cached
-        let collection = cache::Collection::get(&ctx.props().id);
-        match collection.as_ref() {
+        // Check if collection already exists locally
+        let mut collection = cache::Collection::get(&ctx.props().id);
+        match collection.as_mut() {
             None => {
                 // Check if identifier is an address
                 if let Ok(address) = Address::from_str(&ctx.props().id) {
@@ -75,7 +81,16 @@ impl Component for Collection {
                             .link()
                             .send_message(Message::RequestMetadata(collection.start_token)),
                     }
+
+                    if let None = collection.total_supply {
+                        ctx.link()
+                            .send_message(Message::RequestTotalSupply(address.clone()))
+                    }
                 }
+
+                // Update last viewed on collection
+                collection.last_viewed = Some(chrono::offset::Utc::now());
+                cache::Collection::insert(ctx.props().id.clone(), collection.clone())
             }
         }
 
@@ -101,17 +116,21 @@ impl Component for Collection {
                         }
                         etherscan::Response::NoTokenUri(_address) => Message::UriFailed,
                         etherscan::Response::TokenUriFailed(address) => Message::UriFailed,
+                        etherscan::Response::TotalSupply(total_supply) => {
+                            Message::TotalSupply(total_supply)
+                        }
+                        etherscan::Response::NoTotalSupply(_) => Message::None,
+                        etherscan::Response::TotalSupplyFailed(_) => Message::None,
                     })
                 }
             })),
             metadata: metadata::Worker::bridge(Rc::new({
                 let link = ctx.link().clone();
                 move |e: metadata::Response| match e {
-                    Response::Completed(metadata, token) => link.send_message(Message::Metadata(
-                        token.expect("expected valid token"),
-                        metadata,
-                    )),
-                    Response::NotFound(url, token) => {
+                    metadata::Response::Completed(metadata, token) => link.send_message(
+                        Message::Metadata(token.expect("expected valid token"), metadata),
+                    ),
+                    metadata::Response::NotFound(url, token) => {
                         link.send_message(Message::NotFound(token.expect("expected valid token")))
                     }
                 }
@@ -140,7 +159,9 @@ impl Component for Collection {
                     name: contract.name.clone(),
                     base_uri: None,
                     start_token: 0,
+                    total_supply: None,
                     tokens: IndexMap::new(),
+                    last_viewed: Some(chrono::offset::Utc::now()),
                 };
                 cache::Collection::insert(ctx.props().id.clone(), collection.clone());
                 self.collection = Some(collection);
@@ -148,6 +169,8 @@ impl Component for Collection {
                 log::trace!("attempting to resolve first token using contract base uri ...");
                 ctx.link()
                     .send_message(Message::RequestBaseUri(contract.address));
+                ctx.link()
+                    .send_message(Message::RequestTotalSupply(contract.address));
                 true
             }
             Message::NoContract(address) => {
@@ -232,6 +255,20 @@ impl Component for Collection {
                 ));
                 true
             }
+            // Total Supply
+            Message::RequestTotalSupply(address) => {
+                // Request contract info via etherscan worker
+                self.etherscan
+                    .send(etherscan::Request::TotalSupply(address));
+                false
+            }
+            Message::TotalSupply(total_supply) => {
+                if let Some(collection) = self.collection.as_mut() {
+                    collection.total_supply = Some(total_supply);
+                    cache::Collection::insert(ctx.props().id.clone(), collection.clone());
+                }
+                false
+            }
             // Metadata
             Message::RequestMetadata(token) => {
                 if let Some(collection) = self.collection.as_ref() {
@@ -269,6 +306,8 @@ impl Component for Collection {
                 }
                 false
             }
+            // Ignore
+            Message::None => false,
         }
     }
 
@@ -301,6 +340,12 @@ impl Component for Collection {
 
             if let Some(collection) = &self.collection {
                 <h1 class="title nifty-name">{ collection.name.clone() }</h1>
+                if let Some(address) = collection.address.as_ref() {
+                    <h1 class="subtitle">{ address.to_string() }</h1>
+                }
+                if let Some(total_supply) = collection.total_supply.as_ref() {
+                    <h1 class="subtitle">{ total_supply.to_string() }</h1>
+                }
 
                 <div class="columns is-multiline">
                 {

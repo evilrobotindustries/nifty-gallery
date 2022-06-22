@@ -1,6 +1,9 @@
 use crate::components::token::RecentTokens;
-use crate::{cache, uri, Address, Route};
+use crate::models::Collection;
+use crate::{cache, models, uri, Address, Route};
 use itertools::Itertools;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::str::FromStr;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlInputElement, Node};
@@ -76,32 +79,6 @@ pub fn home() -> yew::Html {
         }
         parent.class_list().remove_1("is-active");
     });
-    let collections: Option<Vec<Html>> = cache::Collection::items().map_or(None, |collections| {
-        Some(
-            collections
-                .into_iter()
-                .sorted_by_key(|(_, collection)| collection.name.clone())
-                .map(|collection| {
-                    let route = match collection.1.address {
-                        Some(address) => Route::Collection {
-                            id: TypeExtensions::format(&address),
-                        },
-                        None => Route::CollectionToken {
-                            uri: collection.0,
-                            token: collection.1.start_token,
-                        },
-                    };
-                    html! {
-                        <Link<Route> to={route}>
-                            <div class="dropdown-item">
-                                { collection.1.name }
-                            </div>
-                        </Link<Route>>
-                    }
-                })
-                .collect(),
-        )
-    });
     html! {
         <section class="hero is-fullheight">
             <div class="hero-body">
@@ -125,13 +102,11 @@ pub fn home() -> yew::Html {
                                         <span class="icon is-small is-left">
                                             <i class="fas fa-globe"></i>
                                         </span>
-                                        if let Some(collections) = collections {
-                                            <div class="dropdown-menu" id="dropdown-menu" role="menu">
-                                                <div class="dropdown-content">
-                                                    { collections }
-                                                </div>
+                                        <div class="dropdown-menu" id="dropdown-menu" role="menu">
+                                            <div class="dropdown-content">
+                                                { collections() }
                                             </div>
-                                        }
+                                        </div>
                                     </div>
                                     <div class="control">
                                         <a href="javascript:void(0);" class="button is-primary">
@@ -143,6 +118,7 @@ pub fn home() -> yew::Html {
                         </div>
                     </div>
                     <section class="section" style="overflow:hidden">
+                        <p class="title">{"Recently Viewed"}</p>
                         <RecentTokens />
                     </section>
                 </div>
@@ -150,6 +126,86 @@ pub fn home() -> yew::Html {
         </section>
     }
 }
+
+fn collections() -> Vec<Html> {
+    let mut collections: Vec<Html> = Vec::new();
+
+    fn html<'a>(
+        collections: impl Iterator<Item = (&'a String, &'a models::Collection)>,
+    ) -> Vec<Html> {
+        collections
+            .map(|(id, collection)| {
+                let route = Route::collection(&id, &collection);
+                html! {
+                    <Link<Route> to={route}>
+                        <div class="dropdown-item">
+                            { collection.name.clone() }
+                        </div>
+                    </Link<Route>>
+                }
+            })
+            .collect()
+    }
+
+    // Add recent collections
+    if let Some(recent) = cache::Collection::items() {
+        let mut recent = html(
+            recent
+                .iter()
+                .filter(|(_, collection)| collection.last_viewed.is_some())
+                .sorted_by_key(|(_, collection)| collection.last_viewed.unwrap())
+                .rev(),
+        );
+        if recent.len() > 0 {
+            // Add header
+            collections.push(html! {
+                <div class="dropdown-header dropdown-item">
+                    { "Recent Collections" }
+                </div>
+            });
+        }
+        collections.append(&mut recent);
+    }
+
+    if collections.len() > 0 {
+        collections.push(html! { <hr class="dropdown-divider" /> });
+    }
+
+    // Add top collections
+    collections.push(html! {
+        <div class="dropdown-header dropdown-item">
+            { "Notable Collections" }
+        </div>
+    });
+    collections.append(&mut html(
+        TOP_COLLECTIONS
+            .iter()
+            .sorted_by_key(|(_, collection)| &collection.name),
+    ));
+
+    collections
+}
+
+static TOP_COLLECTIONS: Lazy<HashMap<String, models::Collection>> = Lazy::new(|| {
+    let collections = crate::COLLECTIONS
+        .iter()
+        .map(|(name, address, base_uri, total_supply)| {
+            (
+                address.to_string(),
+                Collection::new(address, name, base_uri, *total_supply),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    // Add items to local cache
+    for (id, collection) in &collections {
+        if !cache::Collection::contains_key(&id) {
+            cache::Collection::insert(id.clone(), collection.clone());
+        }
+    }
+
+    collections
+});
 
 #[function_component(Navigation)]
 pub fn nav() -> yew::Html {

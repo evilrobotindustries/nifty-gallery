@@ -30,6 +30,7 @@ pub enum Request {
     Contract(Address),
     BaseUri(Address),
     TokenUri(Address, u32),
+    TotalSupply(Address),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -46,6 +47,10 @@ pub enum Response {
     TokenUri(String, u32),
     NoTokenUri(Address),
     TokenUriFailed(Address),
+    // Total Supply
+    TotalSupply(u32),
+    NoTotalSupply(Address),
+    TotalSupplyFailed(Address),
 }
 
 pub enum Message {
@@ -61,6 +66,10 @@ pub enum Message {
     RequestTokenUri(Address, u32, HandlerId),
     TokenUri(String, u32, HandlerId),
     TokenUriFailed(Address, HandlerId),
+    // Total Supply
+    RequestTotalSupply(Address, HandlerId),
+    TotalSupply(u32, HandlerId),
+    TotalSupplyFailed(Address, HandlerId),
 }
 
 impl gloo_worker::Worker for Worker {
@@ -132,7 +141,7 @@ impl gloo_worker::Worker for Worker {
                     "baseURI",
                     &vec![],
                     id,
-                    |base_uri, id| Message::BaseUri(base_uri, id),
+                    |tokens, id| Message::BaseUri(tokens[0].to_string(), id),
                     |address, id| Message::BaseUriFailed(address, id),
                 ) {
                     match e {
@@ -161,7 +170,7 @@ impl gloo_worker::Worker for Worker {
                     "tokenURI",
                     &vec![Token::Uint(token.into())],
                     id,
-                    move |token_uri, id| Message::TokenUri(token_uri, token, id),
+                    move |tokens, id| Message::TokenUri(tokens[0].to_string(), token, id),
                     move |address, id| Message::TokenUriFailed(address, id),
                 ) {
                     match e {
@@ -183,6 +192,38 @@ impl gloo_worker::Worker for Worker {
                 log::trace!("token uri failed");
                 self.link.respond(id, Response::TokenUriFailed(contract));
             }
+            // Total Supply
+            Message::RequestTotalSupply(address, id) => {
+                if let Err(e) = self.call_contract(
+                    address,
+                    "totalSupply",
+                    &vec![],
+                    id,
+                    move |mut tokens, id| match tokens.remove(0).into_uint() {
+                        Some(total_supply) => Message::TotalSupply(total_supply.as_u32(), id),
+                        None => Message::TotalSupplyFailed(address, id),
+                    },
+                    move |address, id| Message::TotalSupplyFailed(address, id),
+                ) {
+                    match e {
+                        ContractError::MissingFunction(_name) => {
+                            self.link.respond(id, Response::NoTotalSupply(address))
+                        }
+                        ContractError::MissingContract(address) => {
+                            self.update(Message::RequestContract(address, id))
+                        }
+                        _ => self.link.respond(id, Response::TotalSupplyFailed(address)),
+                    }
+                }
+            }
+            Message::TotalSupply(total_supply, id) => {
+                log::trace!("total supply succeeded: {total_supply}");
+                self.link.respond(id, Response::TotalSupply(total_supply));
+            }
+            Message::TotalSupplyFailed(address, id) => {
+                log::trace!("total supply failed");
+                self.link.respond(id, Response::TotalSupplyFailed(address));
+            }
         }
     }
 
@@ -195,6 +236,7 @@ impl gloo_worker::Worker for Worker {
             Request::TokenUri(address, token) => {
                 self.update(Message::RequestTokenUri(address, token, id))
             }
+            Request::TotalSupply(address) => self.update(Message::RequestTotalSupply(address, id)),
         }
     }
 
@@ -266,7 +308,7 @@ impl Worker {
         fail: F,
     ) -> Result<(), ContractError>
     where
-        S: 'static + Fn(String, HandlerId) -> Message,
+        S: 'static + Fn(Vec<Token>, HandlerId) -> Message,
         F: 'static + Fn(Address, HandlerId) -> Message,
     {
         match self.contracts.get(&address) {
@@ -302,7 +344,7 @@ impl Worker {
                                             let decoded = hex::decode(&result[2..])
                                                 .expect("could not decode the call result");
                                             match function.decode_output(&decoded) {
-                                                Ok(tokens) => success(tokens[0].to_string(), id),
+                                                Ok(tokens) => success(tokens, id),
                                                 Err(e) => {
                                                     log::error!("{:?}", e);
                                                     fail(address, id)

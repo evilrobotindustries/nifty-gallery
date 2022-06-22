@@ -6,7 +6,7 @@ use std::collections::HashMap;
 pub struct Collection {}
 
 impl Collection {
-    const STORAGE_KEY: &'static str = "Collections:Viewed";
+    const STORAGE_KEY: &'static str = "Collections";
 
     fn cache() -> gloo_storage::Result<HashMap<String, crate::models::Collection>> {
         LocalStorage::get(Collection::STORAGE_KEY)
@@ -14,6 +14,13 @@ impl Collection {
 
     fn clear() {
         LocalStorage::delete(Collection::STORAGE_KEY)
+    }
+
+    pub(crate) fn contains_key(key: &str) -> bool {
+        match Collection::cache() {
+            Ok(cache) => cache.contains_key(key),
+            Err(e) => false,
+        }
     }
 
     pub fn get(key: &str) -> Option<crate::models::Collection> {

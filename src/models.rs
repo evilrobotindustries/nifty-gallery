@@ -2,6 +2,7 @@ use crate::{uri, Address};
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use workers::metadata::Metadata;
 use workers::{ParseError, Url};
 
@@ -11,10 +12,30 @@ pub struct Collection {
     pub name: String,
     pub base_uri: Option<Url>,
     pub start_token: u32,
+    pub total_supply: Option<u32>,
     pub tokens: IndexMap<u32, Token>,
+    pub last_viewed: Option<DateTime<Utc>>,
 }
 
 impl Collection {
+    pub(crate) fn new(address: &str, name: &str, base_uri: &str, total_supply: u32) -> Collection {
+        Collection {
+            address: Some(
+                Address::from_str(address)
+                    .expect(&format!("unable to parse {address} as an address")),
+            ),
+            name: name.to_string(),
+            base_uri: Some(
+                Url::from_str(base_uri)
+                    .expect(&format!("unable to parse {base_uri} as a url").to_string()),
+            ),
+            start_token: 0,
+            total_supply: Some(total_supply),
+            tokens: Default::default(),
+            last_viewed: None,
+        }
+    }
+
     pub(crate) fn add(&mut self, token: u32, mut metadata: Metadata) {
         // Parse urls
         metadata.image = uri::parse(&metadata.image).map_or(metadata.image, |url| url.to_string());
