@@ -70,7 +70,7 @@ impl Component for Address {
                 // Check if already resolved to collection
                 log::trace!("checking if address already resolved to collection...");
                 let key = TypeExtensions::format(&address);
-                if let Some(collection) = cache::Collection::get(&key) {
+                if let Some(_) = cache::Collection::get(&key) {
                     log::trace!("switching to collection...");
                     // Switch to collection view
                     ctx.link()

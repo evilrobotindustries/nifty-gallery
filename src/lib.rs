@@ -1,5 +1,6 @@
 use std::rc::Rc;
-use workers::{Bridge, Bridged};
+use workers::etherscan::TypeExtensions;
+use workers::{etherscan, Bridge, Bridged};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
@@ -13,7 +14,7 @@ extern crate core;
 type Address = workers::etherscan::Address;
 
 pub struct App {
-    worker: Box<dyn Bridge<workers::etherscan::Worker>>,
+    etherscan: Box<dyn Bridge<workers::etherscan::Worker>>,
 }
 
 impl Component for App {
@@ -26,9 +27,8 @@ impl Component for App {
         }
 
         Self {
-            worker: workers::etherscan::Worker::bridge(Rc::new({
-                move |e: workers::etherscan::Response| {}
-            })),
+            // Declare 'globally' so workers not disposed when navigating between components which rely on them
+            etherscan: etherscan::Worker::bridge(Rc::new(move |e: etherscan::Response| {})),
         }
     }
 
@@ -52,7 +52,7 @@ pub enum Route {
     #[at("/c/:id")]
     Collection { id: String },
     #[at("/c/:uri/:token")]
-    CollectionToken { uri: String, token: usize },
+    CollectionToken { uri: String, token: u32 },
     #[at("/")]
     Home,
     #[not_found]
@@ -60,6 +60,26 @@ pub enum Route {
     NotFound,
     #[at("/t/:uri")]
     Token { uri: String },
+}
+
+impl Route {
+    fn token(token: &models::Token, collection: Option<&models::Collection>) -> Route {
+        match token.id {
+            Some(id) => match collection.and_then(|c| c.address) {
+                Some(address) => Route::CollectionToken {
+                    uri: TypeExtensions::format(&address),
+                    token: id,
+                },
+                None => Route::CollectionToken {
+                    uri: uri::encode(&token.url.to_string()),
+                    token: id,
+                },
+            },
+            None => Route::Token {
+                uri: uri::encode(&token.url.to_string()),
+            },
+        }
+    }
 }
 
 fn switch(routes: &Route) -> Html {

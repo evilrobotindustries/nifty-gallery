@@ -1,7 +1,6 @@
 use gloo_net::Error;
 use gloo_worker::{HandlerId, Public, WorkerLink};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use url::{ParseError, Url};
 
 /// JSON-specific serialisation/deserialisation, as workers use bincode
@@ -9,93 +8,83 @@ mod json;
 
 pub struct Worker {
     link: WorkerLink<Self>,
-    subscribers: HashSet<HandlerId>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct Request {
     pub url: String,
+    pub token: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Response {
-    pub metadata: Metadata,
+pub enum Response {
+    Completed(Metadata, Option<u32>),
+    NotFound(String, Option<u32>),
 }
 
-pub enum Msg {
+pub enum Message {
     /// Requests metadata at the specified uri.
-    Request(String),
+    Request(String, Option<u32>, HandlerId),
     /// Processes the resulting metadata before completing.
     Process {
         metadata: Metadata,
         /// The (requested) metadata uri
         uri: String,
+        token: Option<u32>,
+        id: HandlerId,
     },
-    Completed(Metadata),
+    Completed(Metadata, Option<u32>, HandlerId),
     Redirect(String),
     Failed(String),
-    NotFound,
+    NotFound(String, Option<u32>, HandlerId),
 }
 
 impl gloo_worker::Worker for Worker {
     type Reach = Public<Self>;
-    type Message = Msg;
+    type Message = Message;
     type Input = Request;
     type Output = Response;
 
     fn create(link: WorkerLink<Self>) -> Self {
         log::trace!("creating worker...");
-        Self {
-            link,
-            subscribers: HashSet::new(),
-        }
+        Self { link }
     }
 
     fn update(&mut self, msg: Self::Message) {
         log::trace!("updating...");
         match msg {
-            Msg::Request(uri) => {
+            Message::Request(uri, token, id) => {
                 log::trace!("requesting {uri}...");
                 self.link
-                    .send_future(async move { request_metadata(uri).await });
+                    .send_future(async move { request_metadata(uri, token, id).await });
             }
-            Msg::Process { metadata, uri } => {
+            Message::Process {
+                metadata,
+                uri,
+                token,
+                id,
+            } => {
                 log::trace!("processing");
                 // Process the metadata before returning as completed
                 let metadata = process(metadata, Url::parse(&uri).expect("could not parse url"));
-                self.update(Msg::Completed(metadata));
+                self.update(Message::Completed(metadata, token, id));
             }
-            Msg::Completed(metadata) => {
-                log::trace!("completed..");
-                for id in self.subscribers.iter() {
-                    log::trace!("notifying subscriber");
-                    self.link.respond(
-                        *id,
-                        Response {
-                            metadata: metadata.clone(),
-                        },
-                    )
-                }
+            Message::Completed(metadata, token, id) => {
+                log::trace!("metadata completed");
+                self.link.respond(id, Response::Completed(metadata, token));
             }
-            Msg::Redirect(_) => {}
-            Msg::Failed(_) => {}
-            Msg::NotFound => {}
+            Message::Redirect(_) => {}
+            Message::Failed(_) => {}
+            Message::NotFound(url, token, id) => {
+                log::trace!("metadata not found at {url}");
+                self.link.respond(id, Response::NotFound(url, token));
+            }
         }
     }
 
-    fn connected(&mut self, id: HandlerId) {
-        log::trace!("connected");
-        self.subscribers.insert(id);
-    }
-
-    fn handle_input(&mut self, msg: Self::Input, _id: HandlerId) {
+    fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
         log::trace!("request received for {}", msg.url);
-        self.update(Msg::Request(msg.url));
-    }
-
-    fn disconnected(&mut self, id: HandlerId) {
-        log::trace!("disconnected");
-        self.subscribers.remove(&id);
+        self.update(Message::Request(msg.url, msg.token, id));
     }
 
     fn name_of_resource() -> &'static str {
@@ -122,7 +111,7 @@ fn parse_uri(uri: String, base_uri: &Url) -> String {
     uri
 }
 
-async fn request_metadata(uri: String) -> Msg {
+async fn request_metadata(uri: String, token: Option<u32>, id: HandlerId) -> Message {
     log::trace!("requesting...");
     match crate::fetch::get(&uri).await {
         Ok(response) => match response.status() {
@@ -131,34 +120,38 @@ async fn request_metadata(uri: String) -> Msg {
                 match response.text().await {
                     Ok(response) => {
                         if response.len() == 0 {
-                            return Msg::NotFound;
+                            return Message::NotFound(uri, token, id);
                         }
                         match serde_json::from_str::<json::Metadata>(&response) {
-                            Ok(metadata) => Msg::Process {
+                            Ok(metadata) => Message::Process {
                                 metadata: metadata.into(),
                                 uri,
+                                token,
+                                id,
                             },
                             Err(e) => {
                                 log::trace!("{:?}", response);
                                 log::error!("{:?}", e);
-                                Msg::Failed("An error occurred parsing the metadata".to_string())
+                                Message::Failed(
+                                    "An error occurred parsing the metadata".to_string(),
+                                )
                             }
                         }
                     }
                     Err(e) => {
                         log::error!("{:?}", e);
-                        Msg::Failed("An error occurred reading the response".to_string())
+                        Message::Failed("An error occurred reading the response".to_string())
                     }
                 }
             }
             302 => match response.headers().get("location") {
-                Some(uri) => Msg::Redirect(uri),
-                None => {
-                    Msg::Failed("Received 302 Found but location header not present".to_string())
-                }
+                Some(uri) => Message::Redirect(uri),
+                None => Message::Failed(
+                    "Received 302 Found but location header not present".to_string(),
+                ),
             },
-            404 => Msg::NotFound,
-            _ => Msg::Failed(format!(
+            404 => Message::NotFound(uri, token, id),
+            _ => Message::Failed(format!(
                 "Request failed: {} {}",
                 response.status(),
                 response.status_text()
@@ -169,9 +162,9 @@ async fn request_metadata(uri: String) -> Msg {
                 Error::JsError(e) => {
                     // Attempt to get status code
                     log::error!("{:?}", e);
-                    Msg::Failed(format!("Requesting metadata from {uri} failed: {e}"))
+                    Message::Failed(format!("Requesting metadata from {uri} failed: {e}"))
                 }
-                _ => Msg::Failed(format!("Requesting metadata from {uri} failed: {e}")),
+                _ => Message::Failed(format!("Requesting metadata from {uri} failed: {e}")),
             }
         }
     }

@@ -4,34 +4,41 @@ use crate::{
         token,
         token::{Status, Token},
     },
-    models, Address, Route,
+    models, uri, Address, Route,
 };
+use indexmap::IndexMap;
 use std::rc::Rc;
 use std::str::FromStr;
 use web_sys::Document;
-use workers::etherscan::{Contract, Request, Response};
-use workers::{Bridge, Bridged, ParseError, Url};
+use workers::metadata::Response;
+use workers::{etherscan, metadata, Bridge, Bridged, Url};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
 pub struct Collection {
-    worker: Box<dyn Bridge<workers::etherscan::Worker>>,
+    etherscan: Box<dyn Bridge<etherscan::Worker>>,
+    metadata: Box<dyn Bridge<metadata::Worker>>,
     collection: Option<models::Collection>,
-    tokens: Vec<crate::models::Token>,
+    tokens: Vec<models::Token>,
     status: Option<MessageStatus>,
 }
 
 pub enum Message {
+    // Contract
     RequestContract(Address),
-    Contract(Contract),
+    Contract(etherscan::Contract),
     NoContract(Address),
     ContractFailed(Address, u8),
+    // Base Uri
     RequestBaseUri(Address),
     BaseUri(String),
     RequestTokenUri(Address),
-    TokenUri(String, u8),
+    TokenUri(String, u32),
     UriFailed,
-    Index,
+    // Metadata
+    RequestMetadata(u32),
+    Metadata(u32, metadata::Metadata),
+    NotFound(u32),
 }
 
 #[derive(PartialEq, Properties)]
@@ -48,34 +55,65 @@ impl Component for Collection {
     fn create(ctx: &Context<Self>) -> Self {
         // Check if collection already cached
         let collection = cache::Collection::get(&ctx.props().id);
-        if let None = collection {
-            // Check if identifier is an address
-            if let Ok(address) = Address::from_str(&ctx.props().id) {
-                ctx.link().send_message(Message::RequestContract(address));
-            } else {
-                // todo: initialise collection via url
+        match collection.as_ref() {
+            None => {
+                // Check if identifier is an address
+                if let Ok(address) = Address::from_str(&ctx.props().id) {
+                    ctx.link().send_message(Message::RequestContract(address));
+                } else {
+                    // todo: initialise collection via url
+                }
+            }
+            Some(collection) => {
+                if let Some(address) = collection.address.as_ref() {
+                    // Check if base uri missing
+                    match collection.base_uri.as_ref() {
+                        None => ctx
+                            .link()
+                            .send_message(Message::RequestBaseUri(address.clone())),
+                        Some(_) => ctx
+                            .link()
+                            .send_message(Message::RequestMetadata(collection.start_token)),
+                    }
+                }
             }
         }
 
         Self {
-            worker: workers::etherscan::Worker::bridge(Rc::new({
+            etherscan: etherscan::Worker::bridge(Rc::new({
                 let link = ctx.link().clone();
-                move |e: workers::etherscan::Response| {
+                move |e: etherscan::Response| {
                     link.send_message(match e {
-                        Response::Contract(contract) => Self::Message::Contract(contract),
-                        Response::NoContract(address) => Self::Message::NoContract(address),
-                        Response::ContractFailed(address, attempts) => {
-                            Self::Message::ContractFailed(address, attempts)
+                        etherscan::Response::Contract(contract) => Message::Contract(contract),
+                        etherscan::Response::NoContract(address) => Message::NoContract(address),
+                        etherscan::Response::ContractFailed(address, attempts) => {
+                            Message::ContractFailed(address, attempts)
                         }
-                        Response::BaseUri(base_uri) => Self::Message::BaseUri(base_uri),
-                        Response::NoBaseUri(address) => Self::Message::RequestTokenUri(address),
-                        Response::BaseUriFailed(address) => Self::Message::RequestTokenUri(address),
-                        Response::TokenUri(token_uri, token) => {
-                            Self::Message::TokenUri(token_uri, token)
+                        etherscan::Response::BaseUri(base_uri) => Message::BaseUri(base_uri),
+                        etherscan::Response::NoBaseUri(address) => {
+                            Message::RequestTokenUri(address)
                         }
-                        Response::NoTokenUri(address) => Self::Message::UriFailed,
-                        Response::TokenUriFailed(address) => Self::Message::UriFailed,
+                        etherscan::Response::BaseUriFailed(address) => {
+                            Message::RequestTokenUri(address)
+                        }
+                        etherscan::Response::TokenUri(token_uri, token) => {
+                            Message::TokenUri(token_uri, token)
+                        }
+                        etherscan::Response::NoTokenUri(_address) => Message::UriFailed,
+                        etherscan::Response::TokenUriFailed(address) => Message::UriFailed,
                     })
+                }
+            })),
+            metadata: metadata::Worker::bridge(Rc::new({
+                let link = ctx.link().clone();
+                move |e: metadata::Response| match e {
+                    Response::Completed(metadata, token) => link.send_message(Message::Metadata(
+                        token.expect("expected valid token"),
+                        metadata,
+                    )),
+                    Response::NotFound(url, token) => {
+                        link.send_message(Message::NotFound(token.expect("expected valid token")))
+                    }
                 }
             })),
             collection,
@@ -89,7 +127,7 @@ impl Component for Collection {
             // Contract
             Message::RequestContract(address) => {
                 // Request contract info via etherscan worker
-                self.worker.send(Request::Contract(address));
+                self.etherscan.send(etherscan::Request::Contract(address));
                 self.status = Some(MessageStatus::Info(format!(
                     "Checking if address {} is a contract via etherscan.io...",
                     address
@@ -97,12 +135,15 @@ impl Component for Collection {
                 true
             }
             Message::Contract(contract) => {
-                self.collection = Some(models::Collection {
+                let collection = models::Collection {
+                    address: Some(contract.address),
                     name: contract.name.clone(),
-                    address: Some(ctx.props().id.clone()),
-                    start_token: 1, // Default to one rather than zero to minimize failed contract calls
                     base_uri: None,
-                });
+                    start_token: 0,
+                    tokens: IndexMap::new(),
+                };
+                cache::Collection::insert(ctx.props().id.clone(), collection.clone());
+                self.collection = Some(collection);
                 self.status = None;
                 log::trace!("attempting to resolve first token using contract base uri ...");
                 ctx.link()
@@ -124,38 +165,54 @@ impl Component for Collection {
             // Base URI
             Message::RequestBaseUri(address) => {
                 // Request contract info via etherscan worker
-                self.worker.send(Request::BaseUri(address));
+                self.etherscan.send(etherscan::Request::BaseUri(address));
                 false
             }
             Message::BaseUri(base_uri) => {
                 if let Some(collection) = self.collection.as_mut() {
-                    collection.base_uri = Some(base_uri);
-                    ctx.link().send_message(Message::Index);
-                    return true;
+                    match uri::parse(&base_uri) {
+                        Ok(url) => {
+                            collection.base_uri = Some(url);
+                            cache::Collection::insert(ctx.props().id.clone(), collection.clone());
+                            // Request first item in collection
+                            ctx.link()
+                                .send_message(Message::RequestMetadata(collection.start_token));
+                            return true;
+                        }
+                        Err(e) => {
+                            log::error!("unable to parse {base_uri} as a url");
+                        }
+                    }
                 }
                 false
             }
-            // Token URI
             Message::RequestTokenUri(address) => {
                 // Request contract info via etherscan worker
-                self.worker.send(Request::TokenUri(
+                self.etherscan.send(etherscan::Request::TokenUri(
                     address,
-                    self.collection.as_ref().map_or(1, |c| c.start_token),
+                    1, // Default to one rather than zero to minimize failed contract calls
                 ));
                 false
             }
             Message::TokenUri(token_uri, token) => {
                 if let Some(collection) = self.collection.as_mut() {
                     // Parse url to remove the final path segment (token) to use as base uri
-                    match Url::from_str(&token_uri) {
+                    match uri::parse(&token_uri) {
                         Ok(url) => {
-                            if let Some(segments) = url.path_segments() {
-                                if let Some(token) = segments.last() {
-                                    if let Some(base_uri) = token_uri.strip_suffix(token) {
-                                        collection.base_uri = Some(base_uri.to_string());
-                                        ctx.link().send_message(Message::Index);
-                                    }
-                                }
+                            if let Some(base_uri) = url
+                                .path_segments()
+                                .and_then(|segments| segments.last())
+                                .and_then(|token| token_uri.strip_suffix(token))
+                            {
+                                collection.base_uri =
+                                    Some(Url::from_str(base_uri).expect("expected a valid url"));
+                                cache::Collection::insert(
+                                    ctx.props().id.clone(),
+                                    collection.clone(),
+                                );
+                                // Request first item in collection
+                                ctx.link()
+                                    .send_message(Message::RequestMetadata(collection.start_token));
                             }
                         }
                         Err(e) => {
@@ -175,9 +232,41 @@ impl Component for Collection {
                 ));
                 true
             }
-            // Index
-            Message::Index => {
-                todo!("start indexing collection via metadata worker");
+            // Metadata
+            Message::RequestMetadata(token) => {
+                if let Some(collection) = self.collection.as_ref() {
+                    // Check if token already exists
+                    if collection.tokens.contains_key(&token) {
+                        // Request next token
+                        ctx.link().send_message(Message::RequestMetadata(token + 1))
+                    } else if let Some(base_uri) = collection.base_uri.as_ref() {
+                        self.metadata.send(metadata::Request {
+                            url: format!("{base_uri}{token}"),
+                            token: Some(token),
+                        })
+                    }
+                }
+                false
+            }
+            Message::Metadata(token, metadata) => {
+                if let Some(collection) = self.collection.as_mut() {
+                    // Add token to collection and request next item
+                    collection.add(token, metadata);
+                    cache::Collection::insert(ctx.props().id.clone(), collection.clone());
+                    if token < 1000 {
+                        ctx.link().send_message(Message::RequestMetadata(token + 1));
+                    }
+                    return true;
+                }
+                false
+            }
+            Message::NotFound(token) => {
+                if let Some(collection) = self.collection.as_mut() {
+                    if token == collection.start_token {
+                        collection.start_token += 1;
+                        ctx.link().send_message(Message::RequestMetadata(token + 1))
+                    }
+                }
                 false
             }
         }
@@ -192,34 +281,45 @@ impl Component for Collection {
         });
         html! {
             <section class="section is-fullheight">
-                if let Some(status) = status {
-                    <article class={ classes!("message", status.0) }>
+            if let Some(status) = status {
+                <article class={ classes!("message", status.0) }>
+                    <div class="message-body">
+                        { status.1.clone() }
+                    </div>
+                </article>
+
+                if let None = ctx.props().api_key {
+                    <article class="message is-danger">
                         <div class="message-body">
-                            { status.1.clone() }
+                            { format!("Note: No API key has been configured for the etherscan.io API. Requests are \
+                            therefore throttled.",
+                            ) }
                         </div>
                     </article>
+                }
+            }
 
-                    if let None = ctx.props().api_key {
-                        <article class="message is-danger">
-                            <div class="message-body">
-                                { format!("Note: No API key has been configured for the etherscan.io API. Requests are \
-                                therefore throttled.",
-                                ) }
+            if let Some(collection) = &self.collection {
+                <h1 class="title nifty-name">{ collection.name.clone() }</h1>
+
+                <div class="columns is-multiline">
+                {
+                    collection.tokens.values().map(|token| {
+                    html! {
+                        if let Some(metadata) = token.metadata.as_ref() {
+                            <div class="column is-2">
+                                <Link<Route> to={ Route::token(&token, Some(collection)) }>
+                                    <figure class="image">
+                                        <img src={ metadata.image.clone() } alt={ metadata.name.clone() } />
+                                    </figure>
+                                </Link<Route>>
                             </div>
-                        </article>
+                        }
                     }
+                    }).collect::<Html>()
                 }
-
-                if let Some(collection) = &self.collection {
-                    <p>{ collection.name.clone() }</p>
-                    <p>{ collection.base_uri.as_ref().map_or("".to_string(), |uri| uri.clone()) }</p>
-                }
-
-                <div class="columns is-multiline is-mobile">
-                    <div class="column is-one-quarter">
-                        <code>{"is-one-quarter"}</code>
-                    </div>
                 </div>
+            }
             </section>
         }
     }
@@ -235,7 +335,7 @@ enum MessageStatus {
 pub struct CollectionToken {
     //_listener: HistoryListener,
     base_uri: String,
-    start_token: usize,
+    start_token: u32,
     error: Option<String>,
     requesting_metadata: bool,
     document: Document,
@@ -251,7 +351,7 @@ pub enum CollectionTokenMessage {
 #[derive(PartialEq, Properties)]
 pub struct CollectionTokenProperties {
     pub uri: String,
-    pub token: usize,
+    pub token: u32,
 }
 
 impl Component for CollectionToken {
@@ -297,7 +397,7 @@ impl Component for CollectionToken {
                     let uri = &ctx.props().uri;
                     let start_token = ctx.props().token + 1;
                     if let Some(mut collection) = cache::Collection::get(&uri) {
-                        collection.start_token = start_token as u8;
+                        collection.start_token = start_token;
                         cache::Collection::insert(uri.clone(), collection);
                     }
                     ctx.link().history().unwrap().push(Route::CollectionToken {

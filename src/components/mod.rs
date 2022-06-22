@@ -83,10 +83,12 @@ pub fn home() -> yew::Html {
                 .sorted_by_key(|(_, collection)| collection.name.clone())
                 .map(|collection| {
                     let route = match collection.1.address {
-                        Some(address) => Route::Collection { id: address },
+                        Some(address) => Route::Collection {
+                            id: TypeExtensions::format(&address),
+                        },
                         None => Route::CollectionToken {
                             uri: collection.0,
-                            token: collection.1.start_token as usize,
+                            token: collection.1.start_token,
                         },
                     };
                     html! {

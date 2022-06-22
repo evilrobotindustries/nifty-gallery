@@ -2,6 +2,7 @@ use crate::{cache, uri, Route};
 use bulma::carousel::Options;
 use itertools::Itertools;
 use std::rc::Rc;
+use workers::metadata::Response;
 use workers::{Bridge, Bridged};
 use yew::prelude::*;
 use yew_router::prelude::*;
@@ -23,7 +24,7 @@ pub struct Props {
     // The (encoded) token uri, used to identify a collection and to fetch token metadata
     pub token_uri: String,
     // If applicable, the token identifier
-    pub token_id: Option<usize>,
+    pub token_id: Option<u32>,
     #[prop_or_default]
     pub status: Callback<Status>,
 }
@@ -147,8 +148,11 @@ impl Component for Token {
         Self {
             metadata_worker: workers::metadata::Worker::bridge(Rc::new({
                 let link = ctx.link().clone();
-                move |e: workers::metadata::Response| {
-                    link.send_message(Self::Message::Metadata(e.metadata))
+                move |e: workers::metadata::Response| match e {
+                    Response::Completed(metadata, _) => {
+                        link.send_message(Self::Message::Metadata(metadata))
+                    }
+                    Response::NotFound(_, _) => {}
                 }
             })),
             qr_worker: workers::qr::Worker::bridge(Rc::new({
@@ -179,6 +183,7 @@ impl Component for Token {
                 log::trace!("requesting metadata from agent");
                 self.metadata_worker.send(workers::metadata::Request {
                     url: token.url.to_string(),
+                    token: token.id,
                 });
                 self.requesting = Some(token);
                 // ctx.link()
@@ -189,8 +194,10 @@ impl Component for Token {
                 true
             }
             Msg::Redirect(url, token) => {
-                self.metadata_worker
-                    .send(workers::metadata::Request { url });
+                self.metadata_worker.send(workers::metadata::Request {
+                    url,
+                    token: token.id,
+                });
                 self.error = None;
                 ctx.props().status.emit(Status::Requesting);
                 true
@@ -272,7 +279,7 @@ impl Component for Token {
         false
     }
 
-    fn view(&self, ctx: &Context<Self>) -> Html {
+    fn view(&self, _ctx: &Context<Self>) -> Html {
         html! {
             <>
                 if let Some(error) = &self.error {

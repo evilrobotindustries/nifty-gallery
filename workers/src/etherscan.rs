@@ -5,10 +5,10 @@ use etherscan::{
 };
 use gloo_timers::future::sleep;
 use gloo_worker::{HandlerId, Public, WorkerLink};
-use instant::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
+use std::time::Duration;
 
 pub type Address = etherscan::Address;
 pub type Function = etherscan::contracts::Function;
@@ -21,7 +21,6 @@ const RETRY_ATTEMPTS: u8 = 5;
 pub struct Worker {
     link: WorkerLink<Self>,
     client: etherscan::Client,
-    last_request: Option<Instant>,
     contracts: HashMap<Address, ABI>,
 }
 
@@ -30,7 +29,7 @@ pub enum Request {
     ApiKey(String),
     Contract(Address),
     BaseUri(Address),
-    TokenUri(Address, u8),
+    TokenUri(Address, u32),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -44,7 +43,7 @@ pub enum Response {
     NoBaseUri(Address),
     BaseUriFailed(Address),
     // Token URI
-    TokenUri(String, u8),
+    TokenUri(String, u32),
     NoTokenUri(Address),
     TokenUriFailed(Address),
 }
@@ -59,8 +58,8 @@ pub enum Message {
     BaseUri(String, HandlerId),
     BaseUriFailed(Address, HandlerId),
     // Token URI
-    RequestTokenUri(Address, u8, HandlerId),
-    TokenUri(String, u8, HandlerId),
+    RequestTokenUri(Address, u32, HandlerId),
+    TokenUri(String, u32, HandlerId),
     TokenUriFailed(Address, HandlerId),
 }
 
@@ -75,7 +74,6 @@ impl gloo_worker::Worker for Worker {
         Self {
             link,
             client: etherscan::Client::new(""),
-            last_request: None,
             contracts: HashMap::new(),
         }
     }
@@ -142,7 +140,7 @@ impl gloo_worker::Worker for Worker {
                             self.link.respond(id, Response::NoBaseUri(address))
                         }
                         ContractError::MissingContract(address) => {
-                            self.link.respond(id, Response::NoContract(address))
+                            self.update(Message::RequestContract(address, id))
                         }
                         _ => self.link.respond(id, Response::BaseUriFailed(address)),
                     }
@@ -171,7 +169,7 @@ impl gloo_worker::Worker for Worker {
                             self.link.respond(id, Response::NoTokenUri(address))
                         }
                         ContractError::MissingContract(address) => {
-                            self.link.respond(id, Response::NoContract(address))
+                            self.update(Message::RequestContract(address, id))
                         }
                         _ => self.link.respond(id, Response::TokenUriFailed(address)),
                     }
