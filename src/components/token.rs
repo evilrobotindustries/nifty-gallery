@@ -184,6 +184,7 @@ impl Component for Token {
                 self.metadata_worker.send(workers::metadata::Request {
                     url: token.url.to_string(),
                     token: token.id,
+                    cors_proxy: Some(crate::config::CORS_PROXY.to_string()),
                 });
                 self.requesting = Some(token);
                 // ctx.link()
@@ -197,6 +198,7 @@ impl Component for Token {
                 self.metadata_worker.send(workers::metadata::Request {
                     url,
                     token: token.id,
+                    cors_proxy: Some(crate::config::CORS_PROXY.to_string()),
                 });
                 self.error = None;
                 ctx.props().status.emit(Status::Requesting);

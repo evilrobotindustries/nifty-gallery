@@ -1,6 +1,9 @@
+use async_recursion::async_recursion;
 use gloo_net::Error;
 use gloo_worker::{HandlerId, Public, WorkerLink};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::{collections::HashSet, sync::Mutex};
 use url::{ParseError, Url};
 
 /// JSON-specific serialisation/deserialisation, as workers use bincode
@@ -14,6 +17,8 @@ pub struct Worker {
 pub struct Request {
     pub url: String,
     pub token: Option<u32>,
+    /// An optional url to be used as a CORS proxy, should the primary request fail
+    pub cors_proxy: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -24,7 +29,7 @@ pub enum Response {
 
 pub enum Message {
     /// Requests metadata at the specified uri.
-    Request(String, Option<u32>, HandlerId),
+    Request(String, Option<u32>, HandlerId, Option<String>),
     /// Processes the resulting metadata before completing.
     Process {
         metadata: Metadata,
@@ -53,10 +58,10 @@ impl gloo_worker::Worker for Worker {
     fn update(&mut self, msg: Self::Message) {
         log::trace!("updating...");
         match msg {
-            Message::Request(uri, token, id) => {
+            Message::Request(uri, token, id, cors_proxy) => {
                 log::trace!("requesting {uri}...");
                 self.link
-                    .send_future(async move { request_metadata(uri, token, id).await });
+                    .send_future(async move { request_metadata(uri, token, id, cors_proxy).await });
             }
             Message::Process {
                 metadata,
@@ -84,7 +89,7 @@ impl gloo_worker::Worker for Worker {
 
     fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
         log::trace!("request received for {}", msg.url);
-        self.update(Message::Request(msg.url, msg.token, id));
+        self.update(Message::Request(msg.url, msg.token, id, msg.cors_proxy));
     }
 
     fn name_of_resource() -> &'static str {
@@ -111,8 +116,31 @@ fn parse_uri(uri: String, base_uri: &Url) -> String {
     uri
 }
 
-async fn request_metadata(uri: String, token: Option<u32>, id: HandlerId) -> Message {
+static CORS_DOMAINS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+#[async_recursion(?Send)]
+async fn request_metadata(
+    mut uri: String,
+    token: Option<u32>,
+    id: HandlerId,
+    cors_proxy: Option<String>,
+) -> Message {
     log::trace!("requesting...");
+
+    // Check if request should use cors proxy
+    let host = Url::parse(&uri)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| host.to_string()));
+    if let Some(ref host) = host {
+        if CORS_DOMAINS.lock().unwrap().contains(host) {
+            if let Some(proxy) = &cors_proxy {
+                // Update uri to use proxy, appending original uri as parameter
+                log::trace!("using cors proxy...");
+                uri = format!("{proxy}{uri}");
+            }
+        }
+    }
+
     match crate::fetch::get(&uri).await {
         Ok(response) => match response.status() {
             200 => {
@@ -160,6 +188,21 @@ async fn request_metadata(uri: String, token: Option<u32>, id: HandlerId) -> Mes
         Err(e) => {
             match e {
                 Error::JsError(e) => {
+                    // Assume JS error is CORS related and re-attempt request via CORS proxy (if specified)
+                    if let Some(proxy) = &cors_proxy {
+                        log::info!("request failed, re-attempting via cors proxy...");
+                        let request =
+                            request_metadata(format!("{proxy}{uri}"), token, id, None).await;
+                        if !matches!(request, Message::Failed(_)) {
+                            if let Some(host) = host {
+                                log::trace!("cors proxy successful, adding host to cors list for future requests");
+                                CORS_DOMAINS.lock().unwrap().insert(host);
+                            }
+                        }
+
+                        return request;
+                    }
+
                     // Attempt to get status code
                     log::error!("{:?}", e);
                     Message::Failed(format!("Requesting metadata from {uri} failed: {e}"))

@@ -5,7 +5,7 @@ use crate::{
         token,
         token::{Status, Token},
     },
-    models, uri, Address, Route,
+    config, models, uri, Address, Route,
 };
 use chrono::DateTime;
 use indexmap::IndexMap;
@@ -280,6 +280,7 @@ impl Component for Collection {
                         self.metadata.send(metadata::Request {
                             url: format!("{base_uri}{token}"),
                             token: Some(token),
+                            cors_proxy: Some(crate::config::CORS_PROXY.to_string()),
                         })
                     }
                 }

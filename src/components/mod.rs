@@ -110,7 +110,7 @@ fn collections() -> Vec<Html> {
 }
 
 static TOP_COLLECTIONS: Lazy<HashMap<String, models::Collection>> = Lazy::new(|| {
-    let collections = crate::COLLECTIONS
+    let collections = crate::config::COLLECTIONS
         .iter()
         .map(|(name, address, base_uri, total_supply)| {
             (
