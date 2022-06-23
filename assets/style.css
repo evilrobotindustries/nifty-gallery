@@ -123,6 +123,11 @@ a.navbar-item:hover, a.navbar-item:focus {
     font-family: 'Archivo Black', sans-serif;
 }
 
+#search .dropdown-content {
+    max-height: 13em;
+    overflow: auto;
+}
+
 .section.is-fullheight {
     min-height: 100vh;
 }

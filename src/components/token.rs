@@ -490,6 +490,7 @@ pub fn recent_tokens() -> yew::Html {
     });
     html! {
         if let Some(slides) = slides {
+            <p class="title">{"Recently Viewed"}</p>
             <div id="recent-tokens">
                 { slides }
             </div>
