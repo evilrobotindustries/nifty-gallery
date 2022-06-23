@@ -43,6 +43,7 @@ pub enum Message {
     RequestMetadata(u32),
     Metadata(u32, metadata::Metadata),
     NotFound(u32),
+    MetadataFailed(u32),
     // Ignore
     None,
 }
@@ -133,6 +134,9 @@ impl Component for Collection {
                     metadata::Response::NotFound(url, token) => {
                         link.send_message(Message::NotFound(token.expect("expected valid token")))
                     }
+                    metadata::Response::Failed(url, token) => link.send_message(
+                        Message::MetadataFailed(token.expect("expected valid token")),
+                    ),
                 }
             })),
             collection,
@@ -298,7 +302,7 @@ impl Component for Collection {
                 }
                 false
             }
-            Message::NotFound(token) => {
+            Message::NotFound(token) | Message::MetadataFailed(token) => {
                 if let Some(collection) = self.collection.as_mut() {
                     if token == collection.start_token {
                         collection.start_token += 1;

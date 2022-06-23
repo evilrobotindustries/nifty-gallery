@@ -153,6 +153,7 @@ impl Component for Token {
                         link.send_message(Self::Message::Metadata(metadata))
                     }
                     Response::NotFound(_, _) => {}
+                    Response::Failed(_, _) => {}
                 }
             })),
             qr_worker: workers::qr::Worker::bridge(Rc::new({

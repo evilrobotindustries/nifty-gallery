@@ -25,6 +25,7 @@ pub struct Request {
 pub enum Response {
     Completed(Metadata, Option<u32>),
     NotFound(String, Option<u32>),
+    Failed(String, Option<u32>),
 }
 
 pub enum Message {
@@ -40,7 +41,7 @@ pub enum Message {
     },
     Completed(Metadata, Option<u32>, HandlerId),
     Redirect(String),
-    Failed(String),
+    Failed(String, Option<u32>, HandlerId),
     NotFound(String, Option<u32>, HandlerId),
 }
 
@@ -79,7 +80,10 @@ impl gloo_worker::Worker for Worker {
                 self.link.respond(id, Response::Completed(metadata, token));
             }
             Message::Redirect(_) => {}
-            Message::Failed(_) => {}
+            Message::Failed(url, token, id) => {
+                log::trace!("metadata failed at {url}");
+                self.link.respond(id, Response::Failed(url, token));
+            }
             Message::NotFound(url, token, id) => {
                 log::trace!("metadata not found at {url}");
                 self.link.respond(id, Response::NotFound(url, token));
@@ -162,13 +166,19 @@ async fn request_metadata(
                                 log::error!("{:?}", e);
                                 Message::Failed(
                                     "An error occurred parsing the metadata".to_string(),
+                                    token,
+                                    id,
                                 )
                             }
                         }
                     }
                     Err(e) => {
                         log::error!("{:?}", e);
-                        Message::Failed("An error occurred reading the response".to_string())
+                        Message::Failed(
+                            "An error occurred reading the response".to_string(),
+                            token,
+                            id,
+                        )
                     }
                 }
             }
@@ -176,14 +186,20 @@ async fn request_metadata(
                 Some(uri) => Message::Redirect(uri),
                 None => Message::Failed(
                     "Received 302 Found but location header not present".to_string(),
+                    token,
+                    id,
                 ),
             },
             404 => Message::NotFound(uri, token, id),
-            _ => Message::Failed(format!(
-                "Request failed: {} {}",
-                response.status(),
-                response.status_text()
-            )),
+            _ => Message::Failed(
+                format!(
+                    "Request failed: {} {}",
+                    response.status(),
+                    response.status_text()
+                ),
+                token,
+                id,
+            ),
         },
         Err(e) => {
             match e {
@@ -193,7 +209,7 @@ async fn request_metadata(
                         log::info!("request failed, re-attempting via cors proxy...");
                         let request =
                             request_metadata(format!("{proxy}{uri}"), token, id, None).await;
-                        if !matches!(request, Message::Failed(_)) {
+                        if !matches!(request, Message::Failed(_, _, _)) {
                             if let Some(host) = host {
                                 log::trace!("cors proxy successful, adding host to cors list for future requests");
                                 CORS_DOMAINS.lock().unwrap().insert(host);
@@ -205,9 +221,17 @@ async fn request_metadata(
 
                     // Attempt to get status code
                     log::error!("{:?}", e);
-                    Message::Failed(format!("Requesting metadata from {uri} failed: {e}"))
+                    Message::Failed(
+                        format!("Requesting metadata from {uri} failed: {e}"),
+                        token,
+                        id,
+                    )
                 }
-                _ => Message::Failed(format!("Requesting metadata from {uri} failed: {e}")),
+                _ => Message::Failed(
+                    format!("Requesting metadata from {uri} failed: {e}"),
+                    token,
+                    id,
+                ),
             }
         }
     }
