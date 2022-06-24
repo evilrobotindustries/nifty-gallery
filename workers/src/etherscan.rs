@@ -1,3 +1,4 @@
+use ethabi::ParamType;
 use etherscan::{
     contracts::{Contracts, ABI},
     proxy::Proxy,
@@ -28,8 +29,7 @@ pub struct Worker {
 pub enum Request {
     ApiKey(String),
     Contract(Address),
-    BaseUri(Address),
-    TokenUri(Address, u32),
+    Uri(Address, u32),
     TotalSupply(Address),
 }
 
@@ -39,14 +39,10 @@ pub enum Response {
     Contract(Contract),
     NoContract(Address),
     ContractFailed(Address, u8),
-    // Base URI
-    BaseUri(String),
-    NoBaseUri(Address),
-    BaseUriFailed(Address),
-    // Token URI
-    TokenUri(String, u32),
-    NoTokenUri(Address),
-    TokenUriFailed(Address),
+    // URI
+    Uri(String, Option<u32>),
+    NoUri(Address),
+    UriFailed(Address),
     // Total Supply
     TotalSupply(u32),
     NoTotalSupply(Address),
@@ -58,19 +54,17 @@ pub enum Message {
     Contract(Address, String, ABI, HandlerId),
     NoContract(Address, HandlerId),
     ContractFailed(Address, u8, HandlerId),
-    // Base URI
-    RequestBaseUri(Address, HandlerId),
-    BaseUri(String, HandlerId),
-    BaseUriFailed(Address, HandlerId),
-    // Token URI
-    RequestTokenUri(Address, u32, HandlerId),
-    TokenUri(String, u32, HandlerId),
-    TokenUriFailed(Address, HandlerId),
+    // URI
+    RequestUri(Address, u32, HandlerId),
+    Uri(String, Option<u32>, HandlerId),
+    UriFailed(Address, HandlerId),
     // Total Supply
     RequestTotalSupply(Address, HandlerId),
     TotalSupply(u32, HandlerId),
     TotalSupplyFailed(Address, HandlerId),
 }
+
+const URI_FUNCTIONS: [&str; 3] = ["baseURI", "tokenURI", "uri"];
 
 impl gloo_worker::Worker for Worker {
     type Reach = Public<Self>;
@@ -113,7 +107,7 @@ impl gloo_worker::Worker for Worker {
                             Message::NoContract(address, id)
                         }
                         // Failed (after x attempts)
-                        Err(e) => Message::ContractFailed(address, RETRY_ATTEMPTS, id),
+                        Err(_) => Message::ContractFailed(address, RETRY_ATTEMPTS, id),
                     }
                 });
             }
@@ -134,85 +128,102 @@ impl gloo_worker::Worker for Worker {
                 self.link
                     .respond(id, Response::ContractFailed(address, attempts));
             }
-            // Base URI
-            Message::RequestBaseUri(address, id) => {
-                if let Err(e) = self.call_contract(
-                    address,
-                    "baseURI",
-                    &vec![],
-                    id,
-                    |tokens, id| Message::BaseUri(tokens[0].to_string(), id),
-                    |address, id| Message::BaseUriFailed(address, id),
-                ) {
-                    match e {
-                        ContractError::MissingFunction(_name) => {
-                            self.link.respond(id, Response::NoBaseUri(address))
+            // URI
+            Message::RequestUri(address, token, id) => {
+                // Check if contract already exists
+                let contract = match self.contracts.get(&address) {
+                    None => {
+                        log::trace!("contract does not exist locally, requesting...");
+                        self.link
+                            .send_message(Message::RequestContract(address, id));
+                        return;
+                    }
+                    Some(contract) => contract,
+                };
+
+                // Check contract for possible functions
+                for name in URI_FUNCTIONS {
+                    if let Ok(function) = contract.function(name) {
+                        log::trace!(
+                            "{name} function found on contract, preparing contract call..."
+                        );
+                        let mut inputs = Vec::new();
+                        match function.inputs.len() {
+                            0 => {}
+                            1 => {
+                                if let ParamType::Uint(_) = function.inputs[0].kind {
+                                    inputs.push(Token::Uint(token.into()));
+                                }
+                            }
+                            _ => continue,
                         }
-                        ContractError::MissingContract(address) => {
-                            self.update(Message::RequestContract(address, id))
+
+                        // Signal whether url result includes a token
+                        let uri_token = if inputs.len() == 1 { Some(token) } else { None };
+
+                        if let Err(_) = self.call_contract(
+                            address,
+                            function,
+                            &inputs,
+                            id,
+                            move |tokens, id| match tokens.first() {
+                                Some(token) => Message::Uri(token.to_string(), uri_token, id),
+                                None => {
+                                    log::trace!("contract call did not return a result");
+                                    Message::UriFailed(address, id)
+                                }
+                            },
+                            move |address, id| Message::UriFailed(address, id),
+                        ) {
+                            self.link.respond(id, Response::UriFailed(address))
                         }
-                        _ => self.link.respond(id, Response::BaseUriFailed(address)),
+
+                        return;
                     }
                 }
+
+                self.link.respond(id, Response::NoUri(address));
             }
-            Message::BaseUri(base_uri, id) => {
-                log::trace!("base uri succeeded: {base_uri}");
-                self.link.respond(id, Response::BaseUri(base_uri));
+            Message::Uri(uri, token, id) => {
+                log::trace!("uri succeeded: {uri}");
+                self.link.respond(id, Response::Uri(uri, token));
             }
-            Message::BaseUriFailed(address, id) => {
-                log::trace!("base uri failed");
-                self.link.respond(id, Response::BaseUriFailed(address));
-            }
-            // Token URI
-            Message::RequestTokenUri(address, token, id) => {
-                if let Err(e) = self.call_contract(
-                    address,
-                    "tokenURI",
-                    &vec![Token::Uint(token.into())],
-                    id,
-                    move |tokens, id| Message::TokenUri(tokens[0].to_string(), token, id),
-                    move |address, id| Message::TokenUriFailed(address, id),
-                ) {
-                    match e {
-                        ContractError::MissingFunction(_name) => {
-                            self.link.respond(id, Response::NoTokenUri(address))
-                        }
-                        ContractError::MissingContract(address) => {
-                            self.update(Message::RequestContract(address, id))
-                        }
-                        _ => self.link.respond(id, Response::TokenUriFailed(address)),
-                    }
-                }
-            }
-            Message::TokenUri(token_uri, token, id) => {
-                log::trace!("token uri succeeded: {token_uri}");
-                self.link.respond(id, Response::TokenUri(token_uri, token));
-            }
-            Message::TokenUriFailed(contract, id) => {
-                log::trace!("token uri failed");
-                self.link.respond(id, Response::TokenUriFailed(contract));
+            Message::UriFailed(contract, id) => {
+                log::trace!("uri failed");
+                self.link.respond(id, Response::UriFailed(contract));
             }
             // Total Supply
             Message::RequestTotalSupply(address, id) => {
-                if let Err(e) = self.call_contract(
-                    address,
-                    "totalSupply",
-                    &vec![],
-                    id,
-                    move |mut tokens, id| match tokens.remove(0).into_uint() {
-                        Some(total_supply) => Message::TotalSupply(total_supply.as_u32(), id),
-                        None => Message::TotalSupplyFailed(address, id),
-                    },
-                    move |address, id| Message::TotalSupplyFailed(address, id),
-                ) {
-                    match e {
-                        ContractError::MissingFunction(_name) => {
-                            self.link.respond(id, Response::NoTotalSupply(address))
+                // Check if contract already exists
+                let contract = match self.contracts.get(&address) {
+                    None => {
+                        log::trace!("contract does not exist locally, requesting...");
+                        self.link
+                            .send_message(Message::RequestContract(address, id));
+                        return;
+                    }
+                    Some(contract) => contract,
+                };
+
+                // Check for total supply function
+                match contract.function("totalSupply") {
+                    Err(_) => self.link.respond(id, Response::NoTotalSupply(address)),
+                    Ok(function) => {
+                        if let Err(_) = self.call_contract(
+                            address,
+                            function,
+                            &vec![],
+                            id,
+                            move |mut tokens, id| match tokens.remove(0).into_uint() {
+                                Some(total_supply) => {
+                                    Message::TotalSupply(total_supply.as_u32(), id)
+                                }
+                                None => Message::TotalSupplyFailed(address, id),
+                            },
+                            move |address, id| Message::TotalSupplyFailed(address, id),
+                        ) {
+                            self.link.respond(id, Response::TotalSupplyFailed(address))
                         }
-                        ContractError::MissingContract(address) => {
-                            self.update(Message::RequestContract(address, id))
-                        }
-                        _ => self.link.respond(id, Response::TotalSupplyFailed(address)),
                     }
                 }
             }
@@ -232,10 +243,7 @@ impl gloo_worker::Worker for Worker {
         match request {
             Request::ApiKey(api_key) => self.client.api_key = api_key,
             Request::Contract(address) => self.update(Message::RequestContract(address, id)),
-            Request::BaseUri(address) => self.update(Message::RequestBaseUri(address, id)),
-            Request::TokenUri(address, token) => {
-                self.update(Message::RequestTokenUri(address, token, id))
-            }
+            Request::Uri(address, token) => self.update(Message::RequestUri(address, token, id)),
             Request::TotalSupply(address) => self.update(Message::RequestTotalSupply(address, id)),
         }
     }
@@ -299,9 +307,9 @@ impl Worker {
     }
 
     fn call_contract<S, F>(
-        &mut self,
+        &self,
         address: Address,
-        function: &str,
+        function: &Function,
         inputs: &[Token],
         id: HandlerId,
         success: S,
@@ -311,68 +319,49 @@ impl Worker {
         S: 'static + Fn(Vec<Token>, HandlerId) -> Message,
         F: 'static + Fn(Address, HandlerId) -> Message,
     {
-        match self.contracts.get(&address) {
-            Some(contract) => {
-                match contract.function(function) {
-                    Ok(function) => {
-                        match function.encode_input(inputs) {
-                            Ok(encoded) => {
-                                log::trace!(
-                                    "calling '{}' function on contract at {address}...",
-                                    function.name
-                                );
-                                let client = self.client.clone();
-                                let function = function.clone();
-                                let data = hex::encode(&encoded);
-                                self.link.send_future(async move {
-                                    // Call API with retry attempts
-                                    match Worker::call_api(
-                                        || {
-                                            client.call(
-                                                &address,
-                                                &data,
-                                                Some(etherscan::Tag::Latest),
-                                            )
-                                        },
-                                        RETRY_ATTEMPTS,
-                                    )
-                                    .await
-                                    {
-                                        // Successful
-                                        Ok(result) => {
-                                            // Decode the result
-                                            let decoded = hex::decode(&result[2..])
-                                                .expect("could not decode the call result");
-                                            match function.decode_output(&decoded) {
-                                                Ok(tokens) => success(tokens, id),
-                                                Err(e) => {
-                                                    log::error!("{:?}", e);
-                                                    fail(address, id)
-                                                }
-                                            }
-                                        }
-                                        // Failed (after x attempts)
-                                        Err(e) => fail(address, id),
-                                    }
-                                });
-                                Ok(())
-                            }
-                            Err(e) => {
-                                log::error!("could not encode inputs for '{}' on contract at {address}: {e:?}",
-                                    function.name);
-                                Err(ContractError::FunctionEncodingError(function.name.clone()))
+        match function.encode_input(inputs) {
+            Ok(encoded) => {
+                log::trace!(
+                    "calling '{}' function on contract at {address}...",
+                    function.name
+                );
+                let client = self.client.clone();
+                let function = function.clone();
+                let data = hex::encode(&encoded);
+                self.link.send_future(async move {
+                    // Call API with retry attempts
+                    match Worker::call_api(
+                        || client.call(&address, &data, Some(etherscan::Tag::Latest)),
+                        RETRY_ATTEMPTS,
+                    )
+                    .await
+                    {
+                        // Successful
+                        Ok(result) => {
+                            // Decode the result
+                            let decoded = hex::decode(&result[2..])
+                                .expect("could not decode the call result");
+                            match function.decode_output(&decoded) {
+                                Ok(tokens) => success(tokens, id),
+                                Err(e) => {
+                                    log::error!("{:?}", e);
+                                    fail(address, id)
+                                }
                             }
                         }
+                        // Failed (after x attempts)
+                        Err(_) => fail(address, id),
                     }
-                    Err(e) => {
-                        log::error!(
-                            "could not find function '{function}' on contract at {address}: {e:?}"
-                        );
-                        Err(ContractError::MissingFunction(function.to_string()))
-                    }
-                }
+                });
+                Ok(())
             }
-            None => Err(ContractError::MissingContract(address)),
+            Err(e) => {
+                log::error!(
+                    "could not encode inputs for '{}' on contract at {address}: {e:?}",
+                    function.name
+                );
+                Err(ContractError::FunctionEncodingError(function.name.clone()))
+            }
         }
     }
 }
@@ -384,7 +373,5 @@ pub struct Contract {
 }
 
 enum ContractError {
-    MissingContract(Address),
-    MissingFunction(String),
     FunctionEncodingError(String),
 }

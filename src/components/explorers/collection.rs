@@ -1,13 +1,11 @@
-use crate::components::TOP_COLLECTIONS;
 use crate::{
     cache,
     components::{
         token,
         token::{Status, Token},
     },
-    config, models, uri, Address, Route,
+    models, uri, Address, Route,
 };
-use chrono::DateTime;
 use indexmap::IndexMap;
 use std::rc::Rc;
 use std::str::FromStr;
@@ -30,11 +28,9 @@ pub enum Message {
     Contract(etherscan::Contract),
     NoContract(Address),
     ContractFailed(Address, u8),
-    // Base Uri
-    RequestBaseUri(Address),
-    BaseUri(String),
-    RequestTokenUri(Address),
-    TokenUri(String, u32),
+    // URI
+    RequestUri(Address),
+    Uri(String, Option<u32>),
     UriFailed,
     // Total Supply
     RequestTotalSupply(Address),
@@ -77,12 +73,13 @@ impl Component for Collection {
                     match collection.base_uri.as_ref() {
                         None => ctx
                             .link()
-                            .send_message(Message::RequestBaseUri(address.clone())),
+                            .send_message(Message::RequestUri(address.clone())),
                         Some(_) => ctx
                             .link()
                             .send_message(Message::RequestMetadata(collection.start_token)),
                     }
 
+                    // Check if total supply missing
                     if let None = collection.total_supply {
                         ctx.link()
                             .send_message(Message::RequestTotalSupply(address.clone()))
@@ -105,18 +102,9 @@ impl Component for Collection {
                         etherscan::Response::ContractFailed(address, attempts) => {
                             Message::ContractFailed(address, attempts)
                         }
-                        etherscan::Response::BaseUri(base_uri) => Message::BaseUri(base_uri),
-                        etherscan::Response::NoBaseUri(address) => {
-                            Message::RequestTokenUri(address)
-                        }
-                        etherscan::Response::BaseUriFailed(address) => {
-                            Message::RequestTokenUri(address)
-                        }
-                        etherscan::Response::TokenUri(token_uri, token) => {
-                            Message::TokenUri(token_uri, token)
-                        }
-                        etherscan::Response::NoTokenUri(_address) => Message::UriFailed,
-                        etherscan::Response::TokenUriFailed(address) => Message::UriFailed,
+                        etherscan::Response::Uri(uri, token) => Message::Uri(uri, token),
+                        etherscan::Response::NoUri(_address) => Message::UriFailed,
+                        etherscan::Response::UriFailed(address) => Message::UriFailed,
                         etherscan::Response::TotalSupply(total_supply) => {
                             Message::TotalSupply(total_supply)
                         }
@@ -170,9 +158,10 @@ impl Component for Collection {
                 cache::Collection::insert(ctx.props().id.clone(), collection.clone());
                 self.collection = Some(collection);
                 self.status = None;
-                log::trace!("attempting to resolve first token using contract base uri ...");
+                log::trace!("attempting to resolve uri from contract ...");
                 ctx.link()
-                    .send_message(Message::RequestBaseUri(contract.address));
+                    .send_message(Message::RequestUri(contract.address));
+                log::trace!("attempting to resolve total supply from contract ...");
                 ctx.link()
                     .send_message(Message::RequestTotalSupply(contract.address));
                 true
@@ -189,17 +178,38 @@ impl Component for Collection {
                 )));
                 true
             }
-            // Base URI
-            Message::RequestBaseUri(address) => {
+            // URI
+            Message::RequestUri(address) => {
                 // Request contract info via etherscan worker
-                self.etherscan.send(etherscan::Request::BaseUri(address));
+                self.etherscan.send(etherscan::Request::Uri(
+                    address,
+                    1, // Default to one rather than zero to minimize failed contract calls
+                ));
                 false
             }
-            Message::BaseUri(base_uri) => {
+            Message::Uri(uri, token) => {
                 if let Some(collection) = self.collection.as_mut() {
-                    match uri::parse(&base_uri) {
+                    match uri::parse(&uri) {
                         Ok(url) => {
-                            collection.base_uri = Some(url);
+                            // Check if url contains token
+                            match token {
+                                Some(_) => {
+                                    // Parse url to remove the final path segment (token) to use as base uri
+                                    if let Some(base_uri) = url
+                                        .path_segments()
+                                        .and_then(|segments| segments.last())
+                                        .and_then(|token| url.as_str().strip_suffix(token))
+                                    {
+                                        collection.base_uri = Some(
+                                            Url::from_str(base_uri).expect("expected a valid url"),
+                                        );
+                                    }
+                                }
+                                None => {
+                                    collection.base_uri = Some(url);
+                                }
+                            }
+
                             cache::Collection::insert(ctx.props().id.clone(), collection.clone());
                             // Request first item in collection
                             ctx.link()
@@ -207,49 +217,12 @@ impl Component for Collection {
                             return true;
                         }
                         Err(e) => {
-                            log::error!("unable to parse {base_uri} as a url");
-                        }
-                    }
-                }
-                false
-            }
-            Message::RequestTokenUri(address) => {
-                // Request contract info via etherscan worker
-                self.etherscan.send(etherscan::Request::TokenUri(
-                    address,
-                    1, // Default to one rather than zero to minimize failed contract calls
-                ));
-                false
-            }
-            Message::TokenUri(token_uri, token) => {
-                if let Some(collection) = self.collection.as_mut() {
-                    // Parse url to remove the final path segment (token) to use as base uri
-                    match uri::parse(&token_uri) {
-                        Ok(url) => {
-                            if let Some(base_uri) = url
-                                .path_segments()
-                                .and_then(|segments| segments.last())
-                                .and_then(|token| token_uri.strip_suffix(token))
-                            {
-                                collection.base_uri =
-                                    Some(Url::from_str(base_uri).expect("expected a valid url"));
-                                cache::Collection::insert(
-                                    ctx.props().id.clone(),
-                                    collection.clone(),
-                                );
-                                // Request first item in collection
-                                ctx.link()
-                                    .send_message(Message::RequestMetadata(collection.start_token));
-                            }
-                        }
-                        Err(e) => {
-                            log::error!("unable to parse the url '{token_uri}': {e:?}");
+                            log::error!("unable to parse the url '{uri}': {e:?}");
                             self.status = Some(MessageStatus::Danger(
                                 "Could not determine the collection url".to_string(),
                             ));
                         }
                     }
-                    return true;
                 }
                 false
             }

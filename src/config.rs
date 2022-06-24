@@ -10,6 +10,18 @@ pub(crate) static COLLECTIONS: Lazy<Vec<(&str, &str, &str, u32)>> = Lazy::new(||
             10_000,
         ),
         (
+            "BEANZ",
+            "0x306b1ea3ecdf94ab739f1910bbda052ed4a9f949",
+            "https://ikzttp.mypinata.cloud/ipfs/QmPZKyuRw4nQTD6S6R5HaNAXwoQVMj8YydDmad3rC985WZ/",
+            19_950,
+        ),
+        (
+            "Bored Ape Kennel Club",
+            "0xba30e5f9bb24caa003e9f2f0497ad287fdf95623",
+            "https://ipfs.io/ipfs/QmTDcCdt3yb6mZitzWBmQr65AW6Wska295Dg9nbEYpSUDR/",
+            9_602,
+        ),
+        (
             "Bored Ape Yacht Club",
             "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d",
             "https://ipfs.io/ipfs/QmeSjSinHpPnmXmspMjwiXyN6zS4E9zccariGR3jxcaWtq/",
@@ -26,6 +38,12 @@ pub(crate) static COLLECTIONS: Lazy<Vec<(&str, &str, &str, u32)>> = Lazy::new(||
             "0x1a92f7381b9f03921564a437210bb9396471050c",
             "https://api.coolcatsnft.com/cat/",
             9_941,
+        ),
+        (
+            "CrypToadz by GREMPLIN",
+            "0x1cb1a5e65610aeff2551a50f76a87a7d3fb649c6",
+            "https://arweave.net/OVAmf1xgB6atP0uZg1U0fMd0Lw6DlsVqdvab-WTXZ1Q/",
+            7_025,
         ),
         (
             "Doodles",
@@ -56,6 +74,12 @@ pub(crate) static COLLECTIONS: Lazy<Vec<(&str, &str, &str, u32)>> = Lazy::new(||
             "0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258",
             "https://api.otherside.xyz/lands/",
             100_000,
+        ),
+        (
+            "World of Women",
+            "0xe785e82358879f061bc3dcac6f0444462d4b5330",
+            "https://wow-prod-nftribe.s3.eu-west-2.amazonaws.com/t/",
+            10_000,
         ),
     ]
 });
