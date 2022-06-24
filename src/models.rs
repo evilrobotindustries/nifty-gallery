@@ -18,7 +18,12 @@ pub struct Collection {
 }
 
 impl Collection {
-    pub(crate) fn new(address: &str, name: &str, base_uri: &str, total_supply: u32) -> Collection {
+    pub(crate) fn new(
+        address: &str,
+        name: &str,
+        base_uri: &str,
+        total_supply: Option<u32>,
+    ) -> Collection {
         Collection {
             address: Some(
                 Address::from_str(address)
@@ -30,7 +35,7 @@ impl Collection {
                     .expect(&format!("unable to parse {base_uri} as a url").to_string()),
             ),
             start_token: 0,
-            total_supply: Some(total_supply),
+            total_supply,
             tokens: Default::default(),
             last_viewed: None,
         }

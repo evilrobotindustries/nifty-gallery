@@ -43,6 +43,12 @@ body {
     height: 100%;
 }
 
+.collection-header .column {
+    display:flex;
+    flex-direction:column;
+    justify-content:space-between
+}
+
 .dropdown-header {
     font-weight: bold;
 }
@@ -119,6 +125,10 @@ a.navbar-item:hover, a.navbar-item:focus {
     padding-bottom: 3rem;
 }
 
+.is-bottom {
+    margin-top: auto;
+}
+
 .nifty-name {
     font-family: 'Archivo Black', sans-serif;
 }
@@ -138,4 +148,18 @@ a.navbar-item:hover, a.navbar-item:focus {
 
 .tags.has-addons .tag:not(:first-child) {
     font-weight: bold;
+}
+
+.is-loading {
+    -webkit-animation: spinAround .5s infinite linear;
+    animation: spinAround .5s infinite linear;
+    border: 2px solid #dbdbdb;
+    border-radius: 9999px;
+    border-right-color: transparent;
+    border-top-color: transparent;
+    content: "";
+    display: block;
+    height: 1em;
+    position: relative;
+    width: 1em;
 }

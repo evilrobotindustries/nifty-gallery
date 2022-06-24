@@ -115,7 +115,7 @@ static TOP_COLLECTIONS: Lazy<HashMap<String, models::Collection>> = Lazy::new(||
         .map(|(name, address, base_uri, total_supply)| {
             (
                 address.to_string(),
-                Collection::new(address, name, base_uri, *total_supply),
+                Collection::new(address, name, base_uri, total_supply.clone()),
             )
         })
         .collect::<HashMap<_, _>>();

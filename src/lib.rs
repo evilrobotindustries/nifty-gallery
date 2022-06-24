@@ -15,8 +15,8 @@ extern crate core;
 type Address = workers::etherscan::Address;
 
 pub struct App {
-    etherscan: Box<dyn Bridge<etherscan::Worker>>,
-    metadata: Box<dyn Bridge<metadata::Worker>>,
+    _etherscan: Box<dyn Bridge<etherscan::Worker>>,
+    _metadata: Box<dyn Bridge<metadata::Worker>>,
 }
 
 impl Component for App {
@@ -30,8 +30,8 @@ impl Component for App {
 
         Self {
             // Declare workers 'globally' so not disposed when navigating between components which rely on them
-            etherscan: etherscan::Worker::bridge(Rc::new(move |e: etherscan::Response| {})),
-            metadata: metadata::Worker::bridge(Rc::new(move |e: metadata::Response| {})),
+            _etherscan: etherscan::Worker::bridge(Rc::new(move |e: etherscan::Response| {})),
+            _metadata: metadata::Worker::bridge(Rc::new(move |e: metadata::Response| {})),
         }
     }
 

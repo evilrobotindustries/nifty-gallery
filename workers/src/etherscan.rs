@@ -64,7 +64,7 @@ pub enum Message {
     TotalSupplyFailed(Address, HandlerId),
 }
 
-const URI_FUNCTIONS: [&str; 3] = ["baseURI", "tokenURI", "uri"];
+const URI_FUNCTIONS: [&str; 4] = ["baseURI", "baseTokenURI", "tokenURI", "uri"];
 
 impl gloo_worker::Worker for Worker {
     type Reach = Public<Self>;
@@ -134,8 +134,7 @@ impl gloo_worker::Worker for Worker {
                 let contract = match self.contracts.get(&address) {
                     None => {
                         log::trace!("contract does not exist locally, requesting...");
-                        self.link
-                            .send_message(Message::RequestContract(address, id));
+                        self.update(Message::RequestContract(address, id));
                         return;
                     }
                     Some(contract) => contract,
@@ -198,8 +197,7 @@ impl gloo_worker::Worker for Worker {
                 let contract = match self.contracts.get(&address) {
                     None => {
                         log::trace!("contract does not exist locally, requesting...");
-                        self.link
-                            .send_message(Message::RequestContract(address, id));
+                        self.update(Message::RequestContract(address, id));
                         return;
                     }
                     Some(contract) => contract,

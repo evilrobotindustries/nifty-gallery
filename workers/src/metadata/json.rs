@@ -175,7 +175,7 @@ impl<'de> Deserialize<'de> for Attribute {
                     }
                 }
                 let display_type = display_type.map_or("", |t| t);
-                let trait_type = trait_type.ok_or_else(|| de::Error::missing_field(TRAIT_TYPE))?;
+                let trait_type = trait_type.unwrap_or_else(|| "Attribute".to_string());
                 let value = value.ok_or_else(|| de::Error::missing_field(VALUE))?;
                 Ok(match display_type {
                     NUMBER => Attribute::Number {
@@ -245,4 +245,22 @@ fn sequence_or_map<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<Att
     }
 
     deserializer.deserialize_any(SequenceOrMap(PhantomData))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::metadata::json::Attribute;
+
+    #[test]
+    fn attribute_handles_missing_trait_type() {
+        let json = r#"{ "value": "Value" }"#;
+        let attribute =
+            serde_json::from_str::<Attribute>(json).expect("unable to deserialize attribute");
+        if let Attribute::String { trait_type, value } = attribute {
+            assert_eq!("Attribute", trait_type);
+            assert_eq!("Value", value);
+        } else {
+            panic!("Attribute was not deserialised as expected")
+        }
+    }
 }

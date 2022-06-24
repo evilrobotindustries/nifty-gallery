@@ -18,8 +18,10 @@ pub struct Collection {
     etherscan: Box<dyn Bridge<etherscan::Worker>>,
     metadata: Box<dyn Bridge<metadata::Worker>>,
     collection: Option<models::Collection>,
-    tokens: Vec<models::Token>,
     status: Option<MessageStatus>,
+    page: usize,
+    page_size: usize,
+    working: bool,
 }
 
 pub enum Message {
@@ -40,6 +42,8 @@ pub enum Message {
     Metadata(u32, metadata::Metadata),
     NotFound(u32),
     MetadataFailed(u32),
+    // Paging
+    Page(usize),
     // Ignore
     None,
 }
@@ -128,8 +132,10 @@ impl Component for Collection {
                 }
             })),
             collection,
-            tokens: Vec::new(),
             status: None,
+            page: 1,
+            page_size: 36,
+            working: false,
         }
     }
 
@@ -143,39 +149,54 @@ impl Component for Collection {
                     "Checking if address {} is a contract via etherscan.io...",
                     address
                 )));
+                self.working = true;
                 true
             }
             Message::Contract(contract) => {
-                let collection = models::Collection {
-                    address: Some(contract.address),
-                    name: contract.name.clone(),
-                    base_uri: None,
-                    start_token: 0,
-                    total_supply: None,
-                    tokens: IndexMap::new(),
-                    last_viewed: Some(chrono::offset::Utc::now()),
+                let collection = match cache::Collection::get(&ctx.props().id) {
+                    None => models::Collection {
+                        address: Some(contract.address),
+                        name: contract.name.clone(),
+                        base_uri: None,
+                        start_token: 0,
+                        total_supply: None,
+                        tokens: IndexMap::new(),
+                        last_viewed: Some(chrono::offset::Utc::now()),
+                    },
+                    Some(collection) => collection,
                 };
+
+                self.working = false;
+                if let None = collection.base_uri {
+                    log::trace!("attempting to resolve uri from contract ...");
+                    ctx.link()
+                        .send_message(Message::RequestUri(contract.address));
+                    self.working = true;
+                }
+                if let None = collection.total_supply {
+                    log::trace!("attempting to resolve total supply from contract ...");
+                    ctx.link()
+                        .send_message(Message::RequestTotalSupply(contract.address));
+                    self.working = true;
+                }
+
                 cache::Collection::insert(ctx.props().id.clone(), collection.clone());
                 self.collection = Some(collection);
                 self.status = None;
-                log::trace!("attempting to resolve uri from contract ...");
-                ctx.link()
-                    .send_message(Message::RequestUri(contract.address));
-                log::trace!("attempting to resolve total supply from contract ...");
-                ctx.link()
-                    .send_message(Message::RequestTotalSupply(contract.address));
                 true
             }
             Message::NoContract(address) => {
                 self.status = Some(MessageStatus::Danger(format!(
                     "No contract found for {address}"
                 )));
+                self.working = false;
                 true
             }
             Message::ContractFailed(address, attempts) => {
                 self.status = Some(MessageStatus::Danger(format!(
                     "Contract could not be found for {address}, despite {attempts} attempts"
                 )));
+                self.working = false;
                 true
             }
             // URI
@@ -185,7 +206,8 @@ impl Component for Collection {
                     address,
                     1, // Default to one rather than zero to minimize failed contract calls
                 ));
-                false
+                self.working = true;
+                true
             }
             Message::Uri(uri, token) => {
                 if let Some(collection) = self.collection.as_mut() {
@@ -224,12 +246,14 @@ impl Component for Collection {
                         }
                     }
                 }
-                false
+                self.working = false;
+                true
             }
             Message::UriFailed => {
                 self.status = Some(MessageStatus::Danger(
                     "Unable to determine the collection url via etherscan.io".to_string(),
                 ));
+                self.working = false;
                 true
             }
             // Total Supply
@@ -237,13 +261,15 @@ impl Component for Collection {
                 // Request contract info via etherscan worker
                 self.etherscan
                     .send(etherscan::Request::TotalSupply(address));
-                false
+                self.working = true;
+                true
             }
             Message::TotalSupply(total_supply) => {
                 if let Some(collection) = self.collection.as_mut() {
                     collection.total_supply = Some(total_supply);
                     cache::Collection::insert(ctx.props().id.clone(), collection.clone());
                 }
+                self.working = false;
                 false
             }
             // Metadata
@@ -252,37 +278,62 @@ impl Component for Collection {
                     // Check if token already exists
                     if collection.tokens.contains_key(&token) {
                         // Request next token
-                        ctx.link().send_message(Message::RequestMetadata(token + 1))
+                        ctx.link().send_message(Message::RequestMetadata(token + 1));
                     } else if let Some(base_uri) = collection.base_uri.as_ref() {
                         self.metadata.send(metadata::Request {
                             url: format!("{base_uri}{token}"),
                             token: Some(token),
                             cors_proxy: Some(crate::config::CORS_PROXY.to_string()),
-                        })
+                        });
+                        self.working = true;
+                        return true;
                     }
                 }
                 false
             }
             Message::Metadata(token, metadata) => {
+                self.working = false;
                 if let Some(collection) = self.collection.as_mut() {
                     // Add token to collection and request next item
                     collection.add(token, metadata);
                     cache::Collection::insert(ctx.props().id.clone(), collection.clone());
                     if token < 1000 {
                         ctx.link().send_message(Message::RequestMetadata(token + 1));
+                        self.working = true;
                     }
                     return true;
                 }
-                false
+                true
             }
             Message::NotFound(token) | Message::MetadataFailed(token) => {
+                self.working = false;
                 if let Some(collection) = self.collection.as_mut() {
                     if token == collection.start_token {
                         collection.start_token += 1;
-                        ctx.link().send_message(Message::RequestMetadata(token + 1))
+                        ctx.link().send_message(Message::RequestMetadata(token + 1));
+                        return false;
+                    }
+                    match collection.total_supply {
+                        Some(total_supply) => {
+                            // Continue indexing until total supply reached
+                            if token < total_supply {
+                                ctx.link().send_message(Message::RequestMetadata(token + 1))
+                            }
+                        }
+                        None => {
+                            // Continue indexing for a maximum of 100 tokens
+                            if token < 100 {
+                                ctx.link().send_message(Message::RequestMetadata(token + 1))
+                            }
+                        }
                     }
                 }
-                false
+                true
+            }
+            // Paging
+            Message::Page(page) => {
+                self.page = page;
+                true
             }
             // Ignore
             Message::None => false,
@@ -296,6 +347,14 @@ impl Component for Collection {
             MessageStatus::Warning(message) => ("is-warning", message),
             MessageStatus::Danger(message) => ("is-danger", message),
         });
+        let total_supply = self
+            .collection
+            .as_ref()
+            .and_then(|c| c.total_supply.or(Some(c.tokens.len() as u32)))
+            .unwrap_or(0);
+        let page = self.page;
+        let previous_page = ctx.link().callback(move |e| Message::Page(page - 1));
+        let next_page = ctx.link().callback(move |e| Message::Page(page + 1));
         html! {
             <section class="section is-fullheight">
             if let Some(status) = status {
@@ -317,34 +376,112 @@ impl Component for Collection {
             }
 
             if let Some(collection) = &self.collection {
-                <h1 class="title nifty-name">{ collection.name.clone() }</h1>
-                if let Some(address) = collection.address.as_ref() {
-                    <h1 class="subtitle">{ address.to_string() }</h1>
-                }
-                if let Some(total_supply) = collection.total_supply.as_ref() {
-                    <h1 class="subtitle">{ total_supply.to_string() }</h1>
-                }
-
-                <div class="columns is-multiline">
-                {
-                    collection.tokens.values().map(|token| {
-                    html! {
-                        if let Some(metadata) = token.metadata.as_ref() {
-                            <div class="column is-2">
-                                <Link<Route> to={ Route::token(&token, Some(collection)) }>
-                                    <figure class="image">
-                                        <img src={ metadata.image.clone() } alt={ metadata.name.clone() } />
-                                    </figure>
-                                </Link<Route>>
+                <div class="columns collection-header">
+                    <div class="column">
+                        <h1 class="title nifty-name">{ collection.name.clone() }</h1>
+                        <div class="columns">
+                            <div class="column is-narrow">
+                                <p class="subtitle">
+                                    if let Some(address) = collection.address.as_ref() {
+                                        <span>{ address.to_string() }</span>
+                                    }
+                                </p>
                             </div>
-                        }
-                    }
-                    }).collect::<Html>()
-                }
+                            <div class="column">
+                                <div class="level">
+                                    <div class="level-left">
+                                        <span class="level-item">
+                                        { collection.tokens.len().to_string() }{" / "}{ total_supply.to_string() }{" items"}
+                                        </span>
+                                        if self.working {
+                                            <div class="is-loading level-item"></div>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="column">
+                        <Navigate { page } page_size={ self.page_size } items={ collection.tokens.len() }
+                            previous={ previous_page.clone() } next={ next_page.clone() } />
+                    </div>
                 </div>
+
+                // Collection page
+                <div class="columns is-multiline">
+                    { Collection::page(page - 1, self.page_size, collection) }
+                </div>
+
+                // Bottom navigation
+                <Navigate { page } page_size={ self.page_size } items={ collection.tokens.len() }
+                    previous={ previous_page } next={ next_page } />
             }
             </section>
         }
+    }
+}
+
+impl Collection {
+    fn page(page: usize, page_size: usize, collection: &models::Collection) -> Html {
+        collection
+            .tokens
+            .values()
+            .skip(page * page_size)
+            .take(page_size)
+            .map(|token| {
+                html! {
+                if let Some(metadata) = token.metadata.as_ref() {
+                    <div class="column is-2">
+                        <Link<Route> to={ Route::token(&token, Some(collection)) }>
+                            <figure class="image">
+                                <img src={ metadata.image.clone() } alt={ metadata.name.clone() } />
+                            </figure>
+                        </Link<Route>>
+                    </div>
+                }
+            }
+            })
+            .collect::<Html>()
+    }
+}
+
+#[derive(Properties, PartialEq)]
+struct NavigateProps {
+    page: usize,
+    page_size: usize,
+    items: usize,
+    previous: Callback<MouseEvent>,
+    next: Callback<MouseEvent>,
+}
+
+#[function_component(Navigate)]
+fn navigate(props: &NavigateProps) -> Html {
+    html! {
+        <div class="level is-mobile is-bottom">
+            <div class="level-left"></div>
+            <div class="level-right">
+                <div class="field has-addons">
+                  <div class="control">
+                    if props.page > 1 {
+                        <button onclick={ &props.previous } class="button is-primary">
+                            <span class="icon is-small">
+                              <i class="fas fa-angle-left"></i>
+                            </span>
+                        </button>
+                    }
+                  </div>
+                  <div class="control">
+                    if props.page * props.page_size < props.items {
+                        <button onclick={ &props.next } class="button is-primary">
+                            <span class="icon is-small">
+                              <i class="fas fa-angle-right"></i>
+                            </span>
+                        </button>
+                    }
+                  </div>
+                </div>
+            </div>
+        </div>
     }
 }
 
