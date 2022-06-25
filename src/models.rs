@@ -1,20 +1,30 @@
-use crate::{uri, Address};
+use crate::Address;
 use chrono::{DateTime, Utc};
-use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
+use workers::etherscan::TypeExtensions;
 use workers::metadata::Metadata;
 use workers::{ParseError, Url};
 
 #[derive(Clone, Deserialize, Serialize)]
-pub struct Collection {
-    pub address: Option<Address>,
-    pub name: String,
-    pub base_uri: Option<Url>,
-    pub start_token: u32,
-    pub total_supply: Option<u32>,
-    pub tokens: IndexMap<u32, Token>,
-    pub last_viewed: Option<DateTime<Utc>>,
+pub enum Collection {
+    /// Collection is sourced from a smart contract address
+    Contract {
+        address: Address,
+        name: String,
+        base_uri: Option<Url>,
+        start_token: u32,
+        total_supply: Option<u32>,
+        last_viewed: Option<DateTime<Utc>>,
+    },
+    /// Collection is sourced from url
+    Url {
+        url: String,
+        base_uri: Option<Url>,
+        start_token: u32,
+        total_supply: Option<u32>,
+        last_viewed: Option<DateTime<Utc>>,
+    },
 }
 
 impl Collection {
@@ -24,11 +34,9 @@ impl Collection {
         base_uri: &str,
         total_supply: Option<u32>,
     ) -> Collection {
-        Collection {
-            address: Some(
-                Address::from_str(address)
-                    .expect(&format!("unable to parse {address} as an address")),
-            ),
+        Collection::Contract {
+            address: Address::from_str(address)
+                .expect(&format!("unable to parse {address} as an address")),
             name: name.to_string(),
             base_uri: Some(
                 Url::from_str(base_uri)
@@ -36,34 +44,73 @@ impl Collection {
             ),
             start_token: 0,
             total_supply,
-            tokens: Default::default(),
             last_viewed: None,
         }
     }
 
-    pub(crate) fn add(&mut self, token: u32, mut metadata: Metadata) {
-        // Parse urls
-        metadata.image = uri::parse(&metadata.image).map_or(metadata.image, |url| url.to_string());
-        if let Some(animation_url) = &metadata.animation_url {
-            metadata.animation_url = uri::parse(&animation_url)
-                .map_or(metadata.animation_url, |url| Some(url.to_string()));
+    pub(crate) fn set_base_uri(&mut self, value: Url) {
+        match self {
+            Collection::Contract { base_uri, .. } => *base_uri = Some(value),
+            Collection::Url { base_uri, .. } => *base_uri = Some(value),
         }
+    }
 
-        let url = self
-            .base_uri
-            .as_ref()
-            .expect("expected a base uri")
-            .join(&token.to_string())
-            .expect("expected a valid url");
-        self.tokens.insert(
-            token,
-            Token {
-                url,
-                id: Some(token),
-                metadata: Some(metadata),
-                last_viewed: None,
-            },
-        );
+    pub(crate) fn set_last_viewed(&mut self) {
+        match self {
+            Collection::Contract { last_viewed, .. } => {
+                *last_viewed = Some(chrono::offset::Utc::now())
+            }
+            Collection::Url { last_viewed, .. } => *last_viewed = Some(chrono::offset::Utc::now()),
+        }
+    }
+
+    pub(crate) fn increment_start_token(&mut self, increment: u32) {
+        match self {
+            Collection::Contract { start_token, .. } => *start_token += increment,
+            Collection::Url { start_token, .. } => *start_token += increment,
+        }
+    }
+
+    pub(crate) fn set_total_supply(&mut self, value: u32) {
+        match self {
+            Collection::Contract { total_supply, .. } => *total_supply = Some(value),
+            Collection::Url { total_supply, .. } => *total_supply = Some(value),
+        }
+    }
+
+    pub(crate) fn id(&self) -> String {
+        match self {
+            Collection::Contract { address, .. } => TypeExtensions::format(address),
+            Collection::Url { url, .. } => url.clone(),
+        }
+    }
+
+    pub(crate) fn last_viewed(&self) -> &Option<DateTime<Utc>> {
+        match self {
+            Collection::Contract { last_viewed, .. } => last_viewed,
+            Collection::Url { last_viewed, .. } => last_viewed,
+        }
+    }
+
+    pub(crate) fn name(&self) -> Option<&str> {
+        match self {
+            Collection::Contract { name, .. } => Some(name.as_str()),
+            Collection::Url { .. } => None,
+        }
+    }
+
+    pub(crate) fn start_token(&self) -> &u32 {
+        match self {
+            Collection::Contract { start_token, .. } => start_token,
+            Collection::Url { start_token, .. } => start_token,
+        }
+    }
+
+    pub(crate) fn total_supply(&self) -> &Option<u32> {
+        match self {
+            Collection::Contract { total_supply, .. } => total_supply,
+            Collection::Url { total_supply, .. } => total_supply,
+        }
     }
 }
 

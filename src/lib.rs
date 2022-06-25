@@ -1,13 +1,14 @@
+use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 use workers::etherscan::TypeExtensions;
 use workers::{etherscan, metadata, Bridge, Bridged};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
-mod cache;
 mod components;
 mod config;
 mod models;
+mod storage;
 mod uri;
 
 extern crate core;
@@ -30,8 +31,8 @@ impl Component for App {
 
         Self {
             // Declare workers 'globally' so not disposed when navigating between components which rely on them
-            _etherscan: etherscan::Worker::bridge(Rc::new(move |e: etherscan::Response| {})),
-            _metadata: metadata::Worker::bridge(Rc::new(move |e: metadata::Response| {})),
+            _etherscan: etherscan::Worker::bridge(Rc::new(move |_: etherscan::Response| {})),
+            _metadata: metadata::Worker::bridge(Rc::new(move |_: metadata::Response| {})),
         }
     }
 
@@ -48,7 +49,7 @@ impl Component for App {
     }
 }
 
-#[derive(Routable, PartialEq, Clone, Debug)]
+#[derive(Routable, Eq, Hash, PartialEq, Clone, Debug, Deserialize, Serialize)]
 pub enum Route {
     #[at("/a/:address")]
     Address { address: String },
@@ -67,20 +68,20 @@ pub enum Route {
 
 impl Route {
     fn collection(id: &str, collection: &models::Collection) -> Route {
-        match collection.address {
-            Some(address) => Route::Collection {
-                id: TypeExtensions::format(&address),
+        match collection {
+            models::Collection::Contract { address, .. } => Route::Collection {
+                id: TypeExtensions::format(address),
             },
-            None => Route::CollectionToken {
+            models::Collection::Url { .. } => Route::CollectionToken {
                 uri: id.to_string(),
-                token: collection.start_token,
+                token: *collection.start_token(),
             },
         }
     }
 
-    fn token(token: &models::Token, collection: Option<&models::Collection>) -> Route {
+    fn token(token: &models::Token, collection: Option<Address>) -> Route {
         match token.id {
-            Some(id) => match collection.and_then(|c| c.address) {
+            Some(id) => match collection {
                 Some(address) => Route::CollectionToken {
                     uri: TypeExtensions::format(&address),
                     token: id,

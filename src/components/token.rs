@@ -1,9 +1,10 @@
-use crate::{cache, uri, Route};
+use crate::storage::{Get, RecentlyViewedItem};
+use crate::{storage, uri, Route};
 use bulma::carousel::Options;
 use itertools::Itertools;
 use std::rc::Rc;
 use workers::metadata::Response;
-use workers::{Bridge, Bridged};
+use workers::{metadata, qr, Bridge, Bridged};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
@@ -39,8 +40,8 @@ pub enum Status {
 }
 
 pub struct Token {
-    metadata_worker: Box<dyn Bridge<workers::metadata::Worker>>,
-    qr_worker: Box<dyn Bridge<workers::qr::Worker>>,
+    metadata: Box<dyn Bridge<metadata::Worker>>,
+    qr: Box<dyn Bridge<qr::Worker>>,
     // The current token
     token: Option<crate::models::Token>,
     // If applicable, the corresponding collection
@@ -97,7 +98,7 @@ impl Token {
                     match &self.collection {
                         None => token.id.map_or("".to_string(), |token| token.to_string()),
                         Some(collection) => token.id.map_or("".to_string(), |token| {
-                            format!("{} {}", collection.name, token)
+                            format!("{} {}", collection.name().unwrap_or(""), token)
                         }),
                     },
                     |name| name.to_string(),
@@ -146,9 +147,9 @@ impl Component for Token {
         ctx.link().send_message(Msg::Request(token));
 
         Self {
-            metadata_worker: workers::metadata::Worker::bridge(Rc::new({
+            metadata: metadata::Worker::bridge(Rc::new({
                 let link = ctx.link().clone();
-                move |e: workers::metadata::Response| match e {
+                move |e: metadata::Response| match e {
                     Response::Completed(metadata, _) => {
                         link.send_message(Self::Message::Metadata(metadata))
                     }
@@ -156,12 +157,12 @@ impl Component for Token {
                     Response::Failed(_, _) => {}
                 }
             })),
-            qr_worker: workers::qr::Worker::bridge(Rc::new({
+            qr: qr::Worker::bridge(Rc::new({
                 let link = ctx.link().clone();
-                move |e: workers::qr::Response| link.send_message(Self::Message::QRCode(e.qr_code))
+                move |e: qr::Response| link.send_message(Self::Message::QRCode(e.qr_code))
             })),
             token: None,
-            collection: cache::Collection::get(&ctx.props().token_uri),
+            collection: storage::Collection::get(ctx.props().token_uri.as_str()),
             error: None,
             qr_code: None,
 
@@ -174,15 +175,16 @@ impl Component for Token {
             Msg::Request(token) => {
                 self.error = None;
 
-                // Check cache
-                log::trace!("checking cache");
-                if let Some(token) = cache::Token::get(&token.url.to_string()) {
+                // Check local storage
+                log::trace!("checking local storage");
+                if let Some(token) = storage::Token::get(&token.url.to_string(), token.id.unwrap())
+                {
                     ctx.link().send_message(Msg::Completed(token.clone()));
                     return true;
                 }
 
                 log::trace!("requesting metadata from agent");
-                self.metadata_worker.send(workers::metadata::Request {
+                self.metadata.send(workers::metadata::Request {
                     url: token.url.to_string(),
                     token: token.id,
                     cors_proxy: Some(crate::config::CORS_PROXY.to_string()),
@@ -196,7 +198,7 @@ impl Component for Token {
                 true
             }
             Msg::Redirect(url, token) => {
-                self.metadata_worker.send(workers::metadata::Request {
+                self.metadata.send(workers::metadata::Request {
                     url,
                     token: token.id,
                     cors_proxy: Some(crate::config::CORS_PROXY.to_string()),
@@ -212,16 +214,28 @@ impl Component for Token {
                         metadata.image = match token_uri.token {
                             None => token_uri.uri,
                             Some(id) => format!("{}{}", token_uri.uri, id),
-                        }
+                        };
+
+                        storage::RecentlyViewed::insert(RecentlyViewedItem {
+                            name: metadata
+                                .name
+                                .as_ref()
+                                .map_or_else(|| "".to_string(), |n| n.clone()),
+                            image: metadata.image.clone(),
+                            route: Route::CollectionToken {
+                                uri: ctx.props().token_uri.clone(),
+                                token: ctx.props().token_id.expect("expected a token identifier"),
+                            },
+                        })
                     }
                 }
                 ctx.props().status.emit(Status::Completed);
                 self.token = Some(token.clone());
 
-                // Cache token
-                log::trace!("adding to cache");
+                // Store token
+                log::trace!("adding to local storage");
                 token.last_viewed = Some(chrono::offset::Utc::now());
-                cache::Token::insert(token.url.to_string(), token);
+                storage::Token::insert(token.url.as_str(), token.clone());
                 log::trace!("cached");
                 true
             }
@@ -253,7 +267,7 @@ impl Component for Token {
                     .expect("could not get document location")
                     .href()
                     .expect("could not get document location href as string");
-                self.qr_worker.send(workers::qr::Request { url: location });
+                self.qr.send(workers::qr::Request { url: location });
 
                 self.qr_code = None;
                 true
@@ -392,100 +406,25 @@ impl Component for Token {
     }
 }
 
-// async fn request_metadata(uri: String, mut token: crate::models::Token) -> Msg {
-//     let uri = token.url().unwrap();
-//     match Request::get(&uri).send().await {
-//         Ok(response) => match response.status() {
-//             200 => {
-//                 // Read response as text to handle empty result
-//                 match response.text().await {
-//                     Ok(response) => {
-//                         if response.len() == 0 {
-//                             return Msg::NotFound;
-//                         }
-//
-//                         match serde_json::from_str::<crate::metadata::Metadata>(&response) {
-//                             Ok(metadata) => {
-//                                 token.metadata = Some(metadata);
-//                                 Msg::Completed(token)
-//                             }
-//                             Err(e) => {
-//                                 log::trace!("{:?}", response);
-//                                 log::error!("{:?}", e);
-//                                 Msg::Failed("An error occurred parsing the metadata".to_string())
-//                             }
-//                         }
-//                     }
-//                     Err(e) => {
-//                         log::error!("{:?}", e);
-//                         Msg::Failed("An error occurred reading the response".to_string())
-//                     }
-//                 }
-//             }
-//             302 => match response.headers().get("location") {
-//                 Some(uri) => Msg::Redirect(uri, token),
-//                 None => {
-//                     Msg::Failed("Received 302 Found but location header not present".to_string())
-//                 }
-//             },
-//             404 => Msg::NotFound,
-//             _ => Msg::Failed(format!(
-//                 "Request failed: {} {}",
-//                 response.status(),
-//                 response.status_text()
-//             )),
-//         },
-//         Err(e) => {
-//             match e {
-//                 Error::JsError(e) => {
-//                     // Attempt to get status code
-//                     log::error!("{:?}", e);
-//                     Msg::Failed(format!("Requesting metadata from {uri} failed: {e}"))
-//                 }
-//                 _ => Msg::Failed(format!("Requesting metadata from {uri} failed: {e}")),
-//             }
-//         }
-//     }
-// }
-
 #[function_component(RecentTokens)]
 pub fn recent_tokens() -> yew::Html {
     use_effect(move || {
         // Attach carousel after component is rendered
-        bulma::carousel::attach(Some("#recent-tokens"), Some(Options { slides_to_show: 4 }));
+        bulma::carousel::attach(Some("#recent-views"), Some(Options { slides_to_show: 4 }));
         || {}
     });
-    let slides: Option<Vec<Html>> = cache::Token::values().map_or(None, |recent_tokens| {
+    let slides: Option<Vec<Html>> = storage::RecentlyViewed::values().map_or(None, |recent| {
         Some(
-            recent_tokens
+            recent
                 .into_iter()
-                .sorted_by_key(|token| token.last_viewed)
                 .rev()
-                .map(|token| {
-                    let route = match token.id {
-                        Some(id) => Route::CollectionToken {
-                            uri: uri::encode(&token.url.to_string()),
-                            token: id,
-                        },
-                        None => Route::Token {
-                            uri: uri::encode(&token.url.to_string()),
-                        },
-                    };
-                    match &token.metadata {
-                        Some(metadata) => {
-                            let name = metadata
-                                .name
-                                .as_ref()
-                                .map_or("".to_string(), |name| name.clone());
-                            html! {
-                                <Link<Route> to={route}>
-                                    <figure class="image">
-                                        <img src={ metadata.image.clone() } alt={ name } />
-                                    </figure>
-                                </Link<Route>>
-                            }
-                        }
-                        None => html! {},
+                .map(|item| {
+                    html! {
+                        <Link<Route> to={ item.route }>
+                            <figure class="image">
+                                <img src={ item.image } alt={ item.name } />
+                            </figure>
+                        </Link<Route>>
                     }
                 })
                 .collect(),
@@ -494,7 +433,7 @@ pub fn recent_tokens() -> yew::Html {
     html! {
         if let Some(slides) = slides {
             <p class="title">{"Recently Viewed"}</p>
-            <div id="recent-tokens">
+            <div id="recent-views">
                 { slides }
             </div>
         }

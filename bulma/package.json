@@ -1,6 +1,7 @@
 {
   "devDependencies": {
     "@creativebulma/bulma-collapsible": "^1.0.4",
+    "@creativebulma/bulma-tooltip": "^1.2.0",
     "bulma-carousel": "^4.0.24",
     "copyfiles": "^2.4.1",
     "esbuild": "^0.14.29",
@@ -9,6 +10,8 @@
   "scripts": {
     "prebulma-carousel": "copyfiles -f ./node_modules/bulma-carousel/dist/css/bulma-carousel.min.css assets",
     "bulma-carousel": "esbuild ./node_modules/bulma-carousel --bundle --minify --format=esm --main-fields=browser,module,main --outfile=./assets/bulma-carousel.min.js",
+
+    "bulma-tooltip": "copyfiles -f ./node_modules/@creativebulma/bulma-tooltip/dist/bulma-tooltip.min.css assets",
 
     "prebulma-collapsible": "copyfiles -f ./node_modules/@creativebulma/bulma-collapsible/dist/css/bulma-collapsible.min.css assets",
     "bulma-collapsible": "esbuild ./node_modules/@creativebulma/bulma-collapsible --bundle --minify --format=esm --main-fields=browser,module,main --outfile=./assets/bulma-collapsible.min.js",

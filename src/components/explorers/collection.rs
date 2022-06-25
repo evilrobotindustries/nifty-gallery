@@ -1,15 +1,15 @@
+use crate::storage::Get;
 use crate::{
-    cache,
-    components::{
-        token,
-        token::{Status, Token},
-    },
-    models, uri, Address, Route,
+    components::token::{Status, Token},
+    models, storage, uri, Address, Route,
 };
-use indexmap::IndexMap;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::str::FromStr;
+use thousands::Separable;
 use web_sys::Document;
+use workers::etherscan::TypeExtensions;
+use workers::metadata::Metadata;
 use workers::{etherscan, metadata, Bridge, Bridged, Url};
 use yew::prelude::*;
 use yew_router::prelude::*;
@@ -18,6 +18,7 @@ pub struct Collection {
     etherscan: Box<dyn Bridge<etherscan::Worker>>,
     metadata: Box<dyn Bridge<metadata::Worker>>,
     collection: Option<models::Collection>,
+    tokens: BTreeMap<u32, models::Token>,
     status: Option<MessageStatus>,
     page: usize,
     page_size: usize,
@@ -30,6 +31,7 @@ pub enum Message {
     Contract(etherscan::Contract),
     NoContract(Address),
     ContractFailed(Address, u8),
+    CopyAddress,
     // URI
     RequestUri(Address),
     Uri(String, Option<u32>),
@@ -39,7 +41,7 @@ pub enum Message {
     TotalSupply(u32),
     // Metadata
     RequestMetadata(u32),
-    Metadata(u32, metadata::Metadata),
+    Metadata(u32, Metadata),
     NotFound(u32),
     MetadataFailed(u32),
     // Paging
@@ -61,7 +63,8 @@ impl Component for Collection {
 
     fn create(ctx: &Context<Self>) -> Self {
         // Check if collection already exists locally
-        let mut collection = cache::Collection::get(&ctx.props().id);
+        let mut collection = storage::Collection::get(ctx.props().id.as_str());
+        let mut tokens = None;
         match collection.as_mut() {
             None => {
                 // Check if identifier is an address
@@ -72,27 +75,45 @@ impl Component for Collection {
                 }
             }
             Some(collection) => {
-                if let Some(address) = collection.address.as_ref() {
-                    // Check if base uri missing
-                    match collection.base_uri.as_ref() {
-                        None => ctx
-                            .link()
-                            .send_message(Message::RequestUri(address.clone())),
-                        Some(_) => ctx
-                            .link()
-                            .send_message(Message::RequestMetadata(collection.start_token)),
-                    }
+                match collection {
+                    models::Collection::Contract {
+                        address,
+                        base_uri,
+                        total_supply,
+                        start_token,
+                        ..
+                    } => {
+                        // Check if base uri missing
+                        match base_uri.as_ref() {
+                            None => ctx
+                                .link()
+                                .send_message(Message::RequestUri(address.clone())),
+                            Some(_) => ctx
+                                .link()
+                                .send_message(Message::RequestMetadata(start_token.clone())),
+                        }
 
-                    // Check if total supply missing
-                    if let None = collection.total_supply {
-                        ctx.link()
-                            .send_message(Message::RequestTotalSupply(address.clone()))
+                        // Check if total supply missing
+                        if let None = total_supply {
+                            ctx.link()
+                                .send_message(Message::RequestTotalSupply(address.clone()))
+                        }
+
+                        // Initialise tokens from any previously stored
+                        tokens = Some(
+                            storage::Token::all(&address)
+                                .into_iter()
+                                .filter(|t| t.id.is_some())
+                                .map(|t| (t.id.unwrap(), t))
+                                .collect(),
+                        )
                     }
+                    models::Collection::Url { .. } => {}
                 }
 
-                // Update last viewed on collection
-                collection.last_viewed = Some(chrono::offset::Utc::now());
-                cache::Collection::insert(ctx.props().id.clone(), collection.clone())
+                // Update last viewed on collection and store
+                collection.set_last_viewed();
+                storage::Collection::store(collection.clone())
             }
         }
 
@@ -108,7 +129,7 @@ impl Component for Collection {
                         }
                         etherscan::Response::Uri(uri, token) => Message::Uri(uri, token),
                         etherscan::Response::NoUri(_address) => Message::UriFailed,
-                        etherscan::Response::UriFailed(address) => Message::UriFailed,
+                        etherscan::Response::UriFailed(_address) => Message::UriFailed,
                         etherscan::Response::TotalSupply(total_supply) => {
                             Message::TotalSupply(total_supply)
                         }
@@ -123,15 +144,16 @@ impl Component for Collection {
                     metadata::Response::Completed(metadata, token) => link.send_message(
                         Message::Metadata(token.expect("expected valid token"), metadata),
                     ),
-                    metadata::Response::NotFound(url, token) => {
+                    metadata::Response::NotFound(_url, token) => {
                         link.send_message(Message::NotFound(token.expect("expected valid token")))
                     }
-                    metadata::Response::Failed(url, token) => link.send_message(
+                    metadata::Response::Failed(_url, token) => link.send_message(
                         Message::MetadataFailed(token.expect("expected valid token")),
                     ),
                 }
             })),
             collection,
+            tokens: tokens.unwrap_or_else(|| BTreeMap::new()),
             status: None,
             page: 1,
             page_size: 36,
@@ -153,34 +175,44 @@ impl Component for Collection {
                 true
             }
             Message::Contract(contract) => {
-                let collection = match cache::Collection::get(&ctx.props().id) {
-                    None => models::Collection {
-                        address: Some(contract.address),
+                // Initialise collection from contract
+                let collection = match storage::Collection::get(&contract.address) {
+                    None => models::Collection::Contract {
+                        address: contract.address,
                         name: contract.name.clone(),
                         base_uri: None,
                         start_token: 0,
                         total_supply: None,
-                        tokens: IndexMap::new(),
                         last_viewed: Some(chrono::offset::Utc::now()),
                     },
                     Some(collection) => collection,
                 };
 
+                // Check if collection missing any data which can be resolved from contract
                 self.working = false;
-                if let None = collection.base_uri {
-                    log::trace!("attempting to resolve uri from contract ...");
-                    ctx.link()
-                        .send_message(Message::RequestUri(contract.address));
-                    self.working = true;
-                }
-                if let None = collection.total_supply {
-                    log::trace!("attempting to resolve total supply from contract ...");
-                    ctx.link()
-                        .send_message(Message::RequestTotalSupply(contract.address));
-                    self.working = true;
+                if let models::Collection::Contract {
+                    address,
+                    base_uri,
+                    total_supply,
+                    ..
+                } = &collection
+                {
+                    if let None = base_uri {
+                        log::trace!("attempting to resolve uri from contract ...");
+                        ctx.link()
+                            .send_message(Message::RequestUri(address.clone()));
+                        self.working = true;
+                    }
+                    if let None = total_supply {
+                        log::trace!("attempting to resolve total supply from contract ...");
+                        ctx.link()
+                            .send_message(Message::RequestTotalSupply(address.clone()));
+                        self.working = true;
+                    }
                 }
 
-                cache::Collection::insert(ctx.props().id.clone(), collection.clone());
+                // Store collection locally
+                storage::Collection::store(collection.clone());
                 self.collection = Some(collection);
                 self.status = None;
                 true
@@ -198,6 +230,15 @@ impl Component for Collection {
                 )));
                 self.working = false;
                 true
+            }
+            Message::CopyAddress => {
+                if let Some(models::Collection::Contract { address, .. }) = self.collection {
+                    let window = web_sys::window().expect("global window does not exists");
+                    if let Some(clipboard) = window.navigator().clipboard() {
+                        let _ = clipboard.write_text(&TypeExtensions::format(&address));
+                    }
+                }
+                false
             }
             // URI
             Message::RequestUri(address) => {
@@ -222,20 +263,21 @@ impl Component for Collection {
                                         .and_then(|segments| segments.last())
                                         .and_then(|token| url.as_str().strip_suffix(token))
                                     {
-                                        collection.base_uri = Some(
+                                        collection.set_base_uri(
                                             Url::from_str(base_uri).expect("expected a valid url"),
                                         );
                                     }
                                 }
                                 None => {
-                                    collection.base_uri = Some(url);
+                                    collection.set_base_uri(url);
                                 }
                             }
+                            storage::Collection::store(collection.clone());
 
-                            cache::Collection::insert(ctx.props().id.clone(), collection.clone());
                             // Request first item in collection
-                            ctx.link()
-                                .send_message(Message::RequestMetadata(collection.start_token));
+                            ctx.link().send_message(Message::RequestMetadata(
+                                collection.start_token().clone(),
+                            ));
                             return true;
                         }
                         Err(e) => {
@@ -266,20 +308,22 @@ impl Component for Collection {
             }
             Message::TotalSupply(total_supply) => {
                 if let Some(collection) = self.collection.as_mut() {
-                    collection.total_supply = Some(total_supply);
-                    cache::Collection::insert(ctx.props().id.clone(), collection.clone());
+                    collection.set_total_supply(total_supply);
+                    storage::Collection::store(collection.clone());
                 }
                 self.working = false;
                 false
             }
             // Metadata
             Message::RequestMetadata(token) => {
-                if let Some(collection) = self.collection.as_ref() {
+                if let Some(models::Collection::Contract { base_uri, .. }) =
+                    self.collection.as_ref()
+                {
                     // Check if token already exists
-                    if collection.tokens.contains_key(&token) {
+                    if self.tokens.contains_key(&token) {
                         // Request next token
                         ctx.link().send_message(Message::RequestMetadata(token + 1));
-                    } else if let Some(base_uri) = collection.base_uri.as_ref() {
+                    } else if let Some(base_uri) = base_uri.as_ref() {
                         self.metadata.send(metadata::Request {
                             url: format!("{base_uri}{token}"),
                             token: Some(token),
@@ -293,30 +337,26 @@ impl Component for Collection {
             }
             Message::Metadata(token, metadata) => {
                 self.working = false;
-                if let Some(collection) = self.collection.as_mut() {
-                    // Add token to collection and request next item
-                    collection.add(token, metadata);
-                    cache::Collection::insert(ctx.props().id.clone(), collection.clone());
-                    if token < 1000 {
-                        ctx.link().send_message(Message::RequestMetadata(token + 1));
-                        self.working = true;
-                    }
-                    return true;
+                // Add token to collection and request next item
+                self.add(token, metadata);
+                if token < 1000 {
+                    ctx.link().send_message(Message::RequestMetadata(token + 1));
+                    self.working = true;
                 }
                 true
             }
             Message::NotFound(token) | Message::MetadataFailed(token) => {
                 self.working = false;
                 if let Some(collection) = self.collection.as_mut() {
-                    if token == collection.start_token {
-                        collection.start_token += 1;
+                    if token == *collection.start_token() {
+                        collection.increment_start_token(1);
                         ctx.link().send_message(Message::RequestMetadata(token + 1));
                         return false;
                     }
-                    match collection.total_supply {
+                    match collection.total_supply() {
                         Some(total_supply) => {
                             // Continue indexing until total supply reached
-                            if token < total_supply {
+                            if token < *total_supply {
                                 ctx.link().send_message(Message::RequestMetadata(token + 1))
                             }
                         }
@@ -347,14 +387,10 @@ impl Component for Collection {
             MessageStatus::Warning(message) => ("is-warning", message),
             MessageStatus::Danger(message) => ("is-danger", message),
         });
-        let total_supply = self
-            .collection
-            .as_ref()
-            .and_then(|c| c.total_supply.or(Some(c.tokens.len() as u32)))
-            .unwrap_or(0);
         let page = self.page;
-        let previous_page = ctx.link().callback(move |e| Message::Page(page - 1));
-        let next_page = ctx.link().callback(move |e| Message::Page(page + 1));
+        let copy_address = ctx.link().callback(move |_| Message::CopyAddress);
+        let previous_page = ctx.link().callback(move |_| Message::Page(page - 1));
+        let next_page = ctx.link().callback(move |_| Message::Page(page + 1));
         html! {
             <section class="section is-fullheight">
             if let Some(status) = status {
@@ -378,42 +414,51 @@ impl Component for Collection {
             if let Some(collection) = &self.collection {
                 <div class="columns collection-header">
                     <div class="column">
-                        <h1 class="title nifty-name">{ collection.name.clone() }</h1>
-                        <div class="columns">
-                            <div class="column is-narrow">
-                                <p class="subtitle">
-                                    if let Some(address) = collection.address.as_ref() {
-                                        <span>{ address.to_string() }</span>
-                                    }
-                                </p>
-                            </div>
-                            <div class="column">
-                                <div class="level">
-                                    <div class="level-left">
-                                        <span class="level-item">
-                                        { collection.tokens.len().to_string() }{" / "}{ total_supply.to_string() }{" items"}
-                                        </span>
-                                        if self.working {
-                                            <div class="is-loading level-item"></div>
-                                        }
+                        if let Some(name) = collection.name() {
+                            <h1 class="title nifty-name">{ name.clone() }</h1>
+                        }
+                        <div class="level">
+                            <div class="level-left">
+                                if let models::Collection::Contract{ address, ..} = collection {
+                                    <div class="level-item no-space">
+                                        <p class="has-tooltip-right" data-tooltip={ TypeExtensions::format(address) } >
+                                            { address.to_string() }
+                                        </p>
                                     </div>
-                                </div>
+                                    <div class="level-item">
+                                        <button onclick={ copy_address } class="button">
+                                            <span class="icon is-small">
+                                              <i class="fa-regular fa-clone"></i>
+                                            </span>
+                                        </button>
+                                    </div>
+                                }
+                                <span class="level-item">
+                                    { self.tokens.len().separate_with_commas() }
+                                    if let Some(total_supply) = collection.total_supply() {
+                                        {" / "}{ total_supply.separate_with_commas() }
+                                    }
+                                    {" items"}
+                                </span>
+                                if self.working {
+                                    <div class="is-loading level-item"></div>
+                                }
                             </div>
                         </div>
                     </div>
                     <div class="column">
-                        <Navigate { page } page_size={ self.page_size } items={ collection.tokens.len() }
+                        <Navigate { page } page_size={ self.page_size } items={ self.tokens.len() }
                             previous={ previous_page.clone() } next={ next_page.clone() } />
                     </div>
                 </div>
 
                 // Collection page
                 <div class="columns is-multiline">
-                    { Collection::page(page - 1, self.page_size, collection) }
+                    { Collection::page(page - 1, self.page_size, &self.tokens, collection) }
                 </div>
 
                 // Bottom navigation
-                <Navigate { page } page_size={ self.page_size } items={ collection.tokens.len() }
+                <Navigate { page } page_size={ self.page_size } items={ self.tokens.len() }
                     previous={ previous_page } next={ next_page } />
             }
             </section>
@@ -422,17 +467,54 @@ impl Component for Collection {
 }
 
 impl Collection {
-    fn page(page: usize, page_size: usize, collection: &models::Collection) -> Html {
-        collection
-            .tokens
-            .values()
-            .skip(page * page_size)
-            .take(page_size)
-            .map(|token| {
-                html! {
+    pub(crate) fn add(&mut self, id: u32, mut metadata: Metadata) {
+        // Parse urls
+        metadata.image = uri::parse(&metadata.image).map_or(metadata.image, |url| url.to_string());
+        if let Some(animation_url) = &metadata.animation_url {
+            metadata.animation_url = uri::parse(&animation_url)
+                .map_or(metadata.animation_url, |url| Some(url.to_string()));
+        }
+
+        if let Some(models::Collection::Contract {
+            base_uri, address, ..
+        }) = self.collection.as_ref()
+        {
+            let url = base_uri
+                .as_ref()
+                .expect("expected a base uri")
+                .join(&id.to_string())
+                .expect("expected a valid url");
+            let token = models::Token {
+                url,
+                id: Some(id),
+                metadata: Some(metadata),
+                last_viewed: None,
+            };
+
+            storage::Token::insert(&TypeExtensions::format(address), token.clone());
+            self.tokens.insert(id, token);
+        } else {
+            todo!()
+        }
+    }
+
+    fn page(
+        page: usize,
+        page_size: usize,
+        tokens: &BTreeMap<u32, models::Token>,
+        collection: &models::Collection,
+    ) -> Html {
+        match collection {
+            models::Collection::Contract { address, .. } => {
+                tokens
+                    .values()
+                    .skip(page * page_size)
+                    .take(page_size)
+                    .map(|token| {
+                        html! {
                 if let Some(metadata) = token.metadata.as_ref() {
                     <div class="column is-2">
-                        <Link<Route> to={ Route::token(&token, Some(collection)) }>
+                        <Link<Route> to={ Route::token(&token, Some(*address)) }>
                             <figure class="image">
                                 <img src={ metadata.image.clone() } alt={ metadata.name.clone() } />
                             </figure>
@@ -440,8 +522,11 @@ impl Collection {
                     </div>
                 }
             }
-            })
-            .collect::<Html>()
+                    })
+                    .collect::<Html>()
+            }
+            models::Collection::Url { .. } => { todo!()}
+        }
     }
 }
 
@@ -499,13 +584,13 @@ pub struct CollectionToken {
     error: Option<String>,
     requesting_metadata: bool,
     document: Document,
-    token_status_callback: Callback<token::Status>,
-    token_status: token::Status,
+    token_status_callback: Callback<Status>,
+    token_status: Status,
 }
 
 pub enum CollectionTokenMessage {
     Navigated,
-    TokenStatus(token::Status),
+    TokenStatus(Status),
 }
 
 #[derive(PartialEq, Properties)]
@@ -556,14 +641,15 @@ impl Component for CollectionToken {
                 if matches!(status, Status::NotFound) && ctx.props().token == 0 {
                     let uri = &ctx.props().uri;
                     let start_token = ctx.props().token + 1;
-                    if let Some(mut collection) = cache::Collection::get(&uri) {
-                        collection.start_token = start_token;
-                        cache::Collection::insert(uri.clone(), collection);
+                    if let Some(mut collection) = storage::Collection::get(uri.as_str()) {
+                        collection.increment_start_token(1);
+                        storage::Collection::store(collection);
+
+                        ctx.link().history().unwrap().push(Route::CollectionToken {
+                            uri: uri.clone(),
+                            token: start_token,
+                        });
                     }
-                    ctx.link().history().unwrap().push(Route::CollectionToken {
-                        uri: uri.clone(),
-                        token: start_token,
-                    });
                     return false;
                 }
 
@@ -590,26 +676,34 @@ impl Component for CollectionToken {
                     <div class="level-left"></div>
                     <div class="level-right">
                         <div class="field has-addons">
-                          <div class="control">
-                            if token > 0 {
-                                <Link<Route> classes="button is-primary" to={Route::CollectionToken {
-                                    uri: self.base_uri.clone(), token: token - 1 }}
-                                    disabled={ self.requesting_metadata || token == self.start_token }>
-                                    <span class="icon is-small">
-                                      <i class="fas fa-angle-left"></i>
+                            <div class="control">
+                                <Link<Route> classes="button"
+                                    to={Route::Collection { id: self.base_uri.clone() }}>
+                                    <span class="icon is-small has-tooltip-bottom" data-tooltip="View Collection">
+                                        <i class="fa-solid fa-grip"></i>
                                     </span>
                                 </Link<Route>>
-                            }
-                          </div>
-                          <div class="control">
-                            <Link<Route> classes="button is-primary" to={Route::CollectionToken {
-                                uri: self.base_uri.clone(), token: token + 1 }}
-                                disabled={ self.requesting_metadata }>
-                                <span class="icon is-small">
-                                  <i class="fas fa-angle-right"></i>
-                                </span>
-                            </Link<Route>>
-                          </div>
+                            </div>
+                            <div class="control">
+                                if token > 0 {
+                                    <Link<Route> classes="button is-primary" to={Route::CollectionToken {
+                                        uri: self.base_uri.clone(), token: token - 1 }}
+                                        disabled={ self.requesting_metadata || token == self.start_token }>
+                                        <span class="icon is-small">
+                                          <i class="fas fa-angle-left"></i>
+                                        </span>
+                                    </Link<Route>>
+                                }
+                            </div>
+                            <div class="control">
+                                <Link<Route> classes="button is-primary" to={Route::CollectionToken {
+                                    uri: self.base_uri.clone(), token: token + 1 }}
+                                    disabled={ self.requesting_metadata }>
+                                    <span class="icon is-small">
+                                      <i class="fas fa-angle-right"></i>
+                                    </span>
+                                </Link<Route>>
+                            </div>
                         </div>
                     </div>
                 </div>

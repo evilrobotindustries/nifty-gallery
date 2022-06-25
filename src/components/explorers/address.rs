@@ -1,4 +1,5 @@
-use crate::{cache, Route};
+use crate::storage::Get;
+use crate::{storage, Route};
 use std::rc::Rc;
 use std::str::FromStr;
 use workers::etherscan::{Contract, Request, Response, TypeExtensions};
@@ -69,14 +70,11 @@ impl Component for Address {
             AddressMsg::CheckAddressType(address) => {
                 // Check if already resolved to collection
                 log::trace!("checking if address already resolved to collection...");
-                let key = TypeExtensions::format(&address);
-                if let Some(_) = cache::Collection::get(&key) {
+                let id = TypeExtensions::format(&address);
+                if let Some(_) = storage::Collection::get(id.as_str()) {
                     log::trace!("switching to collection...");
                     // Switch to collection view
-                    ctx.link()
-                        .history()
-                        .unwrap()
-                        .push(Route::Collection { id: key });
+                    ctx.link().history().unwrap().push(Route::Collection { id });
                     return false;
                 }
 

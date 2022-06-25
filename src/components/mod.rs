@@ -1,9 +1,9 @@
 use crate::components::token::RecentTokens;
 use crate::models::Collection;
-use crate::{cache, models, uri, Address, Route};
+use crate::storage::All;
+use crate::{models, storage, uri, Address, Route};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
 use std::str::FromStr;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlInputElement, Node};
@@ -53,16 +53,14 @@ pub fn home() -> yew::Html {
 fn collections() -> Vec<Html> {
     let mut collections: Vec<Html> = Vec::new();
 
-    fn html<'a>(
-        collections: impl Iterator<Item = (&'a String, &'a models::Collection)>,
-    ) -> Vec<Html> {
+    fn html<'a>(collections: impl Iterator<Item = &'a models::Collection>) -> Vec<Html> {
         collections
-            .map(|(id, collection)| {
-                let route = Route::collection(&id, &collection);
+            .map(|collection| {
+                let route = Route::collection(collection.id().as_str(), &collection);
                 html! {
                     <Link<Route> to={route}>
                         <div class="dropdown-item">
-                            { collection.name.clone() }
+                            { collection.name().unwrap().clone() }
                         </div>
                     </Link<Route>>
                 }
@@ -71,24 +69,22 @@ fn collections() -> Vec<Html> {
     }
 
     // Add recent collections
-    if let Some(recent) = cache::Collection::items() {
-        let mut recent = html(
-            recent
-                .iter()
-                .filter(|(_, collection)| collection.last_viewed.is_some())
-                .sorted_by_key(|(_, collection)| collection.last_viewed.unwrap())
-                .rev(),
-        );
-        if recent.len() > 0 {
-            // Add header
-            collections.push(html! {
-                <div class="dropdown-header dropdown-item">
-                    { "Recent Collections" }
-                </div>
-            });
-        }
-        collections.append(&mut recent);
+    let mut recent = html(
+        storage::Collection::get()
+            .iter()
+            .filter(|collection| collection.last_viewed().is_some())
+            .sorted_by_key(|collection| collection.last_viewed().unwrap())
+            .rev(),
+    );
+    if recent.len() > 0 {
+        // Add header
+        collections.push(html! {
+            <div class="dropdown-header dropdown-item">
+                { "Recent Collections" }
+            </div>
+        });
     }
+    collections.append(&mut recent);
 
     if collections.len() > 0 {
         collections.push(html! { <hr class="dropdown-divider" /> });
@@ -103,27 +99,24 @@ fn collections() -> Vec<Html> {
     collections.append(&mut html(
         TOP_COLLECTIONS
             .iter()
-            .sorted_by_key(|(_, collection)| &collection.name),
+            .sorted_by_key(|collection| collection.name().unwrap().clone()),
     ));
 
     collections
 }
 
-static TOP_COLLECTIONS: Lazy<HashMap<String, models::Collection>> = Lazy::new(|| {
+static TOP_COLLECTIONS: Lazy<Vec<models::Collection>> = Lazy::new(|| {
     let collections = crate::config::COLLECTIONS
         .iter()
         .map(|(name, address, base_uri, total_supply)| {
-            (
-                address.to_string(),
-                Collection::new(address, name, base_uri, total_supply.clone()),
-            )
+            Collection::new(address, name, base_uri, *total_supply)
         })
-        .collect::<HashMap<_, _>>();
+        .collect();
 
-    // Add items to local cache
-    for (id, collection) in &collections {
-        if !cache::Collection::contains_key(&id) {
-            cache::Collection::insert(id.clone(), collection.clone());
+    // Add items to local storage
+    for collection in &collections {
+        if !storage::Collection::contains(collection) {
+            storage::Collection::store(collection.clone());
         }
     }
 
@@ -219,7 +212,7 @@ pub fn search() -> yew::Html {
     });
     let on_focus_in = Callback::from(move |e: FocusEvent| {
         let input: HtmlElement = e.target_unchecked_into();
-        input
+        let _ = input
             .offset_parent()
             .expect("could not find element parent")
             .class_list()
@@ -238,7 +231,7 @@ pub fn search() -> yew::Html {
                 }
             }
         }
-        parent.class_list().remove_1("is-active");
+        let _ = parent.class_list().remove_1("is-active");
     });
     html! {
         <div id="search" class="field is-horizontal">
@@ -251,7 +244,7 @@ pub fn search() -> yew::Html {
                          aria-controls="dropdown-menu">
                         <input class="input"
                                type="text"
-                               placeholder="Enter token URL or contract address"
+                               placeholder="Enter contract address or token metadata URL"
                                onchange={ input_change } />
                         <span class="icon is-small is-left">
                             <i class="fas fa-globe"></i>
