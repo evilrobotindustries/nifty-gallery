@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use workers::etherscan::TypeExtensions;
 
-pub(crate) trait Get<I, T> {
+pub trait Get<I, T> {
     fn get(id: I) -> T;
 }
 
-pub(crate) trait All<T> {
+pub trait All<T> {
     fn get() -> T;
 }
 
@@ -32,7 +32,7 @@ impl Get<&str, Option<crate::models::Collection>> for Collection {
 
 impl All<Vec<models::Collection>> for Collection {
     fn get() -> Vec<models::Collection> {
-        let mut collections: HashSet<String> =
+        let collections: HashSet<String> =
             LocalStorage::get(Self::COLLECTIONS).unwrap_or_else(|_| HashSet::new());
         collections
             .iter()
@@ -43,19 +43,19 @@ impl All<Vec<models::Collection>> for Collection {
     }
 }
 
-pub(crate) struct Collection {}
+pub struct Collection {}
 
 impl Collection {
-    const COLLECTION: &'static str = "Collection";
-    const COLLECTIONS: &'static str = "Collections";
+    const COLLECTION: &'static str = "C";
+    const COLLECTIONS: &'static str = "CS";
 
-    pub(crate) fn contains(collection: &crate::models::Collection) -> bool {
+    pub fn contains(collection: &crate::models::Collection) -> bool {
         let collection: gloo_storage::Result<models::Collection> =
             LocalStorage::get(format!("{}:{}", Self::COLLECTION, collection.id()));
         collection.is_ok()
     }
 
-    pub(crate) fn store(collection: crate::models::Collection) {
+    pub fn store(collection: crate::models::Collection) {
         // Store individual item
         let id = collection.id();
         if let Err(e) = LocalStorage::set(format!("{}:{id}", Self::COLLECTION), collection.clone())
@@ -73,17 +73,17 @@ impl Collection {
     }
 }
 
-pub(crate) struct RecentlyViewed {}
+pub struct RecentlyViewed {}
 
 impl RecentlyViewed {
-    const STORAGE_KEY: &'static str = "RecentlyViewed";
+    const STORAGE_KEY: &'static str = "RV";
     const MAX_ITEMS: usize = 10;
 
     fn data() -> gloo_storage::Result<IndexSet<RecentlyViewedItem>> {
         LocalStorage::get(Self::STORAGE_KEY)
     }
 
-    pub(crate) fn insert(item: RecentlyViewedItem) {
+    pub fn insert(item: RecentlyViewedItem) {
         let mut data = Self::data().unwrap_or(IndexSet::new());
         while data.len() >= Self::MAX_ITEMS {
             // Remove the oldest items
@@ -95,57 +95,54 @@ impl RecentlyViewed {
         }
     }
 
-    pub(crate) fn values() -> Option<IndexSet<RecentlyViewedItem>> {
+    pub fn values() -> Option<IndexSet<RecentlyViewedItem>> {
         Self::data().ok()
     }
 }
 
 #[derive(Eq, Hash, PartialEq, Deserialize, Serialize)]
-pub(crate) struct RecentlyViewedItem {
-    pub(crate) name: String,
-    pub(crate) image: String,
-    pub(crate) route: Route,
+pub struct RecentlyViewedItem {
+    pub name: String,
+    pub image: String,
+    pub route: Route,
 }
 
-pub(crate) struct Token {}
+pub struct Token {}
 
 impl Token {
-    const TOKEN: &'static str = "Token";
-    const COLLECTION_TOKENS: &'static str = "CollectionTokens";
+    const TOKEN: &'static str = "T";
+    const COLLECTION_TOKENS: &'static str = "CT";
 
-    pub(crate) fn all(collection: &Address) -> Vec<crate::models::Token> {
-        let collection = TypeExtensions::format(collection);
-        Token::collection(&collection)
+    pub fn all(collection: &str) -> Vec<models::Token> {
+        Token::collection(collection)
             .iter()
-            .map(|token| Token::get(&collection, *token))
+            .map(|token| Token::get(collection, *token))
             .filter(|t| t.is_some())
             .map(|t| t.unwrap())
             .collect()
     }
 
-    pub(crate) fn get(collection: &str, token: u32) -> Option<crate::models::Token> {
+    pub fn get(collection: &str, token: u32) -> Option<models::Token> {
         LocalStorage::get(format!("{}:{collection}:{token}", Self::TOKEN)).ok()
     }
 
-    pub(crate) fn insert(collection: &str, token: crate::models::Token) {
-        if let Some(id) = token.id {
-            if let Err(e) = LocalStorage::set(format!("{}:{collection}:{}", Self::TOKEN, id), token)
-            {
-                log::error!("An error occurred whilst storing the token: {:?}", e)
-            }
+    pub fn store(collection: &str, token: models::Token) {
+        let id = token.id;
+        if let Err(e) = LocalStorage::set(format!("{}:{collection}:{}", Self::TOKEN, id), token) {
+            log::error!("An error occurred whilst storing the token: {:?}", e)
+        }
 
-            // Add to collection
-            let mut collection_tokens = Token::collection(collection);
-            collection_tokens.insert(id);
-            if let Err(e) = LocalStorage::set(
-                format!("{}:{collection}", Self::COLLECTION_TOKENS),
-                collection_tokens,
-            ) {
-                log::error!(
-                    "An error occurred whilst storing the collection tokens: {:?}",
-                    e
-                )
-            }
+        // Add to collection
+        let mut collection_tokens = Token::collection(collection);
+        collection_tokens.insert(id);
+        if let Err(e) = LocalStorage::set(
+            format!("{}:{collection}", Self::COLLECTION_TOKENS),
+            collection_tokens,
+        ) {
+            log::error!(
+                "An error occurred whilst storing the collection tokens: {:?}",
+                e
+            )
         }
     }
 

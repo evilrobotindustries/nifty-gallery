@@ -9,31 +9,39 @@ use workers::{ParseError, Url};
 #[derive(Clone, Deserialize, Serialize)]
 pub enum Collection {
     /// Collection is sourced from a smart contract address
+    #[serde(rename = "c")]
     Contract {
+        #[serde(rename = "a")]
         address: Address,
+        #[serde(rename = "n")]
         name: String,
+        #[serde(rename = "bu")]
         base_uri: Option<Url>,
+        #[serde(rename = "st")]
         start_token: u32,
+        #[serde(rename = "ts")]
         total_supply: Option<u32>,
+        #[serde(rename = "lv")]
         last_viewed: Option<DateTime<Utc>>,
     },
     /// Collection is sourced from url
+    #[serde(rename = "u")]
     Url {
-        url: String,
+        #[serde(rename = "i")]
+        id: String,
+        #[serde(rename = "bu")]
         base_uri: Option<Url>,
+        #[serde(rename = "st")]
         start_token: u32,
+        #[serde(rename = "ts")]
         total_supply: Option<u32>,
+        #[serde(rename = "lv")]
         last_viewed: Option<DateTime<Utc>>,
     },
 }
 
 impl Collection {
-    pub(crate) fn new(
-        address: &str,
-        name: &str,
-        base_uri: &str,
-        total_supply: Option<u32>,
-    ) -> Collection {
+    pub fn new(address: &str, name: &str, base_uri: &str, total_supply: Option<u32>) -> Collection {
         Collection::Contract {
             address: Address::from_str(address)
                 .expect(&format!("unable to parse {address} as an address")),
@@ -48,14 +56,14 @@ impl Collection {
         }
     }
 
-    pub(crate) fn set_base_uri(&mut self, value: Url) {
+    pub fn set_base_uri(&mut self, value: Url) {
         match self {
             Collection::Contract { base_uri, .. } => *base_uri = Some(value),
             Collection::Url { base_uri, .. } => *base_uri = Some(value),
         }
     }
 
-    pub(crate) fn set_last_viewed(&mut self) {
+    pub fn set_last_viewed(&mut self) {
         match self {
             Collection::Contract { last_viewed, .. } => {
                 *last_viewed = Some(chrono::offset::Utc::now())
@@ -64,76 +72,88 @@ impl Collection {
         }
     }
 
-    pub(crate) fn increment_start_token(&mut self, increment: u32) {
+    pub fn increment_start_token(&mut self, increment: u32) {
         match self {
             Collection::Contract { start_token, .. } => *start_token += increment,
             Collection::Url { start_token, .. } => *start_token += increment,
         }
     }
 
-    pub(crate) fn set_total_supply(&mut self, value: u32) {
+    pub fn set_total_supply(&mut self, value: u32) {
         match self {
             Collection::Contract { total_supply, .. } => *total_supply = Some(value),
             Collection::Url { total_supply, .. } => *total_supply = Some(value),
         }
     }
 
-    pub(crate) fn id(&self) -> String {
+    pub fn base_uri(&self) -> &Option<Url> {
         match self {
-            Collection::Contract { address, .. } => TypeExtensions::format(address),
-            Collection::Url { url, .. } => url.clone(),
+            Collection::Contract { base_uri, .. } => base_uri,
+            Collection::Url { base_uri, .. } => base_uri,
         }
     }
 
-    pub(crate) fn last_viewed(&self) -> &Option<DateTime<Utc>> {
+    pub fn id(&self) -> String {
+        match self {
+            Collection::Contract { address, .. } => TypeExtensions::format(address),
+            Collection::Url { id, .. } => id.clone(),
+        }
+    }
+
+    pub fn last_viewed(&self) -> &Option<DateTime<Utc>> {
         match self {
             Collection::Contract { last_viewed, .. } => last_viewed,
             Collection::Url { last_viewed, .. } => last_viewed,
         }
     }
 
-    pub(crate) fn name(&self) -> Option<&str> {
+    pub fn name(&self) -> Option<&str> {
         match self {
             Collection::Contract { name, .. } => Some(name.as_str()),
-            Collection::Url { .. } => None,
+            Collection::Url { base_uri, .. } => base_uri.as_ref().map(|u| u.as_str()),
         }
     }
 
-    pub(crate) fn start_token(&self) -> &u32 {
+    pub fn start_token(&self) -> &u32 {
         match self {
             Collection::Contract { start_token, .. } => start_token,
             Collection::Url { start_token, .. } => start_token,
         }
     }
 
-    pub(crate) fn total_supply(&self) -> &Option<u32> {
+    pub fn total_supply(&self) -> &Option<u32> {
         match self {
             Collection::Contract { total_supply, .. } => total_supply,
             Collection::Url { total_supply, .. } => total_supply,
         }
     }
+
+    pub(crate) fn url(&self, token: u32) -> Option<String> {
+        self.base_uri().as_ref().map(|base_uri| {
+            base_uri
+                .join(token.to_string().as_str())
+                .expect("unable to create token metadata request url")
+                .to_string()
+        })
+    }
 }
 
-#[derive(Clone, Deserialize, Debug, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Token {
-    pub url: Url,
-    pub id: Option<u32>,
-
+    #[serde(rename = "i")]
+    pub id: u32,
+    #[serde(rename = "m")]
     pub metadata: Option<Metadata>,
+    #[serde(rename = "lv")]
     pub last_viewed: Option<DateTime<Utc>>,
 }
 
 impl Token {
-    pub fn create(uri: String, id: Option<u32>) -> Result<Token, ParseError> {
-        let mut url = Url::parse(&uri)?;
-        if let Some(id) = id {
-            url = url.join(&id.to_string())?;
-        }
-        Ok(Token {
-            url,
+    pub fn new(id: u32, metadata: Metadata) -> Self {
+        Self {
             id,
-            metadata: None,
+            metadata: Some(metadata),
             last_viewed: None,
-        })
+        }
     }
 }

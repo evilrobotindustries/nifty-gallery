@@ -8,6 +8,7 @@ use yew_router::prelude::*;
 mod components;
 mod config;
 mod models;
+mod notifications;
 mod storage;
 mod uri;
 
@@ -55,45 +56,27 @@ pub enum Route {
     Address { address: String },
     #[at("/c/:id")]
     Collection { id: String },
-    #[at("/c/:uri/:token")]
-    CollectionToken { uri: String, token: u32 },
+    #[at("/c/:id/:token")]
+    CollectionToken {
+        /// The collection identifier.
+        id: String,
+        /// The token identifier.
+        token: u32,
+    },
     #[at("/")]
     Home,
     #[not_found]
     #[at("/404")]
     NotFound,
-    #[at("/t/:uri")]
-    Token { uri: String },
+    // #[at("/t/:uri")]
+    // Token { uri: String },
 }
 
 impl Route {
-    fn collection(id: &str, collection: &models::Collection) -> Route {
-        match collection {
-            models::Collection::Contract { address, .. } => Route::Collection {
-                id: TypeExtensions::format(address),
-            },
-            models::Collection::Url { .. } => Route::CollectionToken {
-                uri: id.to_string(),
-                token: *collection.start_token(),
-            },
-        }
-    }
-
-    fn token(token: &models::Token, collection: Option<Address>) -> Route {
-        match token.id {
-            Some(id) => match collection {
-                Some(address) => Route::CollectionToken {
-                    uri: TypeExtensions::format(&address),
-                    token: id,
-                },
-                None => Route::CollectionToken {
-                    uri: uri::encode(&token.url.to_string()),
-                    token: id,
-                },
-            },
-            None => Route::Token {
-                uri: uri::encode(&token.url.to_string()),
-            },
+    fn token(token: &models::Token, collection: String) -> Route {
+        Route::CollectionToken {
+            id: collection,
+            token: token.id,
         }
     }
 }
@@ -101,26 +84,25 @@ impl Route {
 fn switch(routes: &Route) -> Html {
     match routes.clone() {
         Route::Address { address } => {
-            html! { <components::explorers::address::Address {address} /> }
+            html! { <components::address::Address { address } /> }
         }
         Route::Collection { id } => {
-            html! { <components::explorers::collection::Collection {id} /> }
+            html! { <components::collection::Collection { id } /> }
         }
-        Route::CollectionToken { uri, token } => {
-            html! { <components::explorers::collection::CollectionToken {uri} {token} /> }
+        Route::CollectionToken { id, token } => {
+            html! { <components::collection::token::Token collection={ id } { token } /> }
         }
         Route::Home => {
             html! { <components::Home /> }
         }
         Route::NotFound => {
             html! { <components::NotFound /> }
-        }
-        Route::Token { uri } => {
-            html! {
-                <section class="section is-fullheight">
-                    <components::token::Token token_uri={uri} />
-                </section>
-            }
-        }
+        } // Route::Token { uri } => {
+          //     html! {
+          //         <section class="section is-fullheight">
+          //             <components::token::Token token_uri={uri} />
+          //         </section>
+          //     }
+          // }
     }
 }

@@ -1,25 +1,25 @@
+use crate::notifications::notify;
 use crate::storage::Get;
-use crate::{
-    components::token::{Status, Token},
-    models, storage, uri, Address, Route,
-};
+use crate::{models, notifications, storage, uri, Address, Route};
+use bulma::toast::Color;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::str::FromStr;
 use thousands::Separable;
-use web_sys::Document;
 use workers::etherscan::TypeExtensions;
 use workers::metadata::Metadata;
 use workers::{etherscan, metadata, Bridge, Bridged, Url};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
+pub mod token;
+
 pub struct Collection {
     etherscan: Box<dyn Bridge<etherscan::Worker>>,
     metadata: Box<dyn Bridge<metadata::Worker>>,
     collection: Option<models::Collection>,
     tokens: BTreeMap<u32, models::Token>,
-    status: Option<MessageStatus>,
+    notified_indexing: bool,
     page: usize,
     page_size: usize,
     working: bool,
@@ -27,6 +27,7 @@ pub struct Collection {
 
 pub enum Message {
     // Contract
+    MissingApiKey,
     RequestContract(Address),
     Contract(etherscan::Contract),
     NoContract(Address),
@@ -41,7 +42,7 @@ pub enum Message {
     TotalSupply(u32),
     // Metadata
     RequestMetadata(u32),
-    Metadata(u32, Metadata),
+    Metadata(String, u32, Metadata),
     NotFound(u32),
     MetadataFailed(u32),
     // Paging
@@ -69,9 +70,38 @@ impl Component for Collection {
             None => {
                 // Check if identifier is an address
                 if let Ok(address) = Address::from_str(&ctx.props().id) {
+                    if let None = ctx.props().api_key {
+                        ctx.link().send_message(Message::MissingApiKey);
+                    }
+
                     ctx.link().send_message(Message::RequestContract(address));
                 } else {
-                    // todo: initialise collection via url
+                    // Initialise collection from url
+                    match uri::decode(ctx.props().id.as_str()) {
+                        Ok(url) => match uri::parse(url.as_str()) {
+                            Ok(base_uri) => {
+                                let c = models::Collection::Url {
+                                    id: ctx.props().id.clone(),
+                                    base_uri: Some(base_uri),
+                                    start_token: 0,
+                                    total_supply: None,
+                                    last_viewed: None,
+                                };
+                                storage::Collection::store(c.clone());
+                                collection = Some(c);
+                                ctx.link().send_message(Message::RequestMetadata(0))
+                            }
+                            Err(e) => {
+                                log::error!("unable to parse the collection url '{url}'")
+                            }
+                        },
+                        Err(e) => {
+                            log::error!(
+                                "unable to decode the collection identifier '{}'",
+                                ctx.props().id
+                            )
+                        }
+                    }
                 }
             }
             Some(collection) => {
@@ -98,18 +128,19 @@ impl Component for Collection {
                             ctx.link()
                                 .send_message(Message::RequestTotalSupply(address.clone()))
                         }
-
-                        // Initialise tokens from any previously stored
-                        tokens = Some(
-                            storage::Token::all(&address)
-                                .into_iter()
-                                .filter(|t| t.id.is_some())
-                                .map(|t| (t.id.unwrap(), t))
-                                .collect(),
-                        )
                     }
-                    models::Collection::Url { .. } => {}
+                    models::Collection::Url { start_token, .. } => ctx
+                        .link()
+                        .send_message(Message::RequestMetadata(start_token.clone())),
                 }
+
+                // Initialise tokens from any previously stored
+                tokens = Some(
+                    storage::Token::all(collection.id().as_str())
+                        .into_iter()
+                        .map(|t| (t.id, t))
+                        .collect(),
+                );
 
                 // Update last viewed on collection and store
                 collection.set_last_viewed();
@@ -141,8 +172,8 @@ impl Component for Collection {
             metadata: metadata::Worker::bridge(Rc::new({
                 let link = ctx.link().clone();
                 move |e: metadata::Response| match e {
-                    metadata::Response::Completed(metadata, token) => link.send_message(
-                        Message::Metadata(token.expect("expected valid token"), metadata),
+                    metadata::Response::Completed(url, token, metadata) => link.send_message(
+                        Message::Metadata(url, token.expect("expected valid token"), metadata),
                     ),
                     metadata::Response::NotFound(_url, token) => {
                         link.send_message(Message::NotFound(token.expect("expected valid token")))
@@ -154,7 +185,7 @@ impl Component for Collection {
             })),
             collection,
             tokens: tokens.unwrap_or_else(|| BTreeMap::new()),
-            status: None,
+            notified_indexing: false,
             page: 1,
             page_size: 36,
             working: false,
@@ -164,13 +195,23 @@ impl Component for Collection {
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             // Contract
+            Message::MissingApiKey => {
+                notifications::notify(
+                    "Warning: No API key has been configured for the etherscan.io API. Requests are therefore throttled.".to_string(),
+                    Some(Color::Warning),
+                );
+                false
+            }
             Message::RequestContract(address) => {
                 // Request contract info via etherscan worker
                 self.etherscan.send(etherscan::Request::Contract(address));
-                self.status = Some(MessageStatus::Info(format!(
-                    "Checking if address {} is a contract via etherscan.io...",
-                    address
-                )));
+                notifications::notify(
+                    format!(
+                        "Checking if address {} is a contract via etherscan.io...",
+                        address
+                    ),
+                    None,
+                );
                 self.working = true;
                 true
             }
@@ -214,20 +255,23 @@ impl Component for Collection {
                 // Store collection locally
                 storage::Collection::store(collection.clone());
                 self.collection = Some(collection);
-                self.status = None;
                 true
             }
             Message::NoContract(address) => {
-                self.status = Some(MessageStatus::Danger(format!(
-                    "No contract found for {address}"
-                )));
+                notifications::notify(
+                    format!("No contract found for {address}"),
+                    Some(Color::Danger),
+                );
                 self.working = false;
                 true
             }
             Message::ContractFailed(address, attempts) => {
-                self.status = Some(MessageStatus::Danger(format!(
-                    "Contract could not be found for {address}, despite {attempts} attempts"
-                )));
+                notifications::notify(
+                    format!(
+                        "Contract could not be found for {address}, despite {attempts} attempts"
+                    ),
+                    Some(Color::Danger),
+                );
                 self.working = false;
                 true
             }
@@ -282,9 +326,10 @@ impl Component for Collection {
                         }
                         Err(e) => {
                             log::error!("unable to parse the url '{uri}': {e:?}");
-                            self.status = Some(MessageStatus::Danger(
+                            notifications::notify(
                                 "Could not determine the collection url".to_string(),
-                            ));
+                                Some(Color::Danger),
+                            );
                         }
                     }
                 }
@@ -292,9 +337,11 @@ impl Component for Collection {
                 true
             }
             Message::UriFailed => {
-                self.status = Some(MessageStatus::Danger(
-                    "Unable to determine the collection url via etherscan.io".to_string(),
-                ));
+                notifications::notify(
+                    "Unable to determine the collection url via etherscan.io. Please try again..."
+                        .to_string(),
+                    Some(Color::Danger),
+                );
                 self.working = false;
                 true
             }
@@ -316,30 +363,45 @@ impl Component for Collection {
             }
             // Metadata
             Message::RequestMetadata(token) => {
-                if let Some(models::Collection::Contract { base_uri, .. }) =
-                    self.collection.as_ref()
-                {
-                    // Check if token already exists
-                    if self.tokens.contains_key(&token) {
-                        // Request next token
-                        ctx.link().send_message(Message::RequestMetadata(token + 1));
-                    } else if let Some(base_uri) = base_uri.as_ref() {
-                        self.metadata.send(metadata::Request {
-                            url: format!("{base_uri}{token}"),
-                            token: Some(token),
-                            cors_proxy: Some(crate::config::CORS_PROXY.to_string()),
-                        });
-                        self.working = true;
-                        return true;
-                    }
+                // Check if token already exists
+                if self.tokens.contains_key(&token) {
+                    // Request next token
+                    ctx.link().send_message(Message::RequestMetadata(token + 1));
+                } else if let Some(url) = self.collection.as_ref().and_then(|c| c.url(token)) {
+                    self.metadata.send(metadata::Request {
+                        url,
+                        token: Some(token),
+                        cors_proxy: Some(crate::config::CORS_PROXY.to_string()),
+                    });
+                    self.working = true;
+                    return true;
                 }
                 false
             }
-            Message::Metadata(token, metadata) => {
+            Message::Metadata(url, token, metadata) => {
+                // Ignore any metadata returned from worker which doesnt pertain to current collection
+                if !url.starts_with(
+                    self.collection
+                        .as_ref()
+                        .and_then(|c| c.base_uri().as_ref())
+                        .map_or_else(|| "", |base_uri| base_uri.as_str()),
+                ) {
+                    log::trace!(
+                        "received token {token} at {url} does not match currently viewed collection {}",
+                        ctx.props().id
+                    );
+                    return false;
+                }
+
                 self.working = false;
                 // Add token to collection and request next item
                 self.add(token, metadata);
                 if token < 1000 {
+                    if !self.notified_indexing {
+                        notifications::notify("Indexing collection...".to_string(), None);
+                        self.notified_indexing = true;
+                    }
+
                     ctx.link().send_message(Message::RequestMetadata(token + 1));
                     self.working = true;
                 }
@@ -381,36 +443,12 @@ impl Component for Collection {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        let status = self.status.as_ref().map(|s| match s {
-            MessageStatus::Info(message) => ("is-info", message),
-            MessageStatus::Success(message) => ("is-success", message),
-            MessageStatus::Warning(message) => ("is-warning", message),
-            MessageStatus::Danger(message) => ("is-danger", message),
-        });
         let page = self.page;
         let copy_address = ctx.link().callback(move |_| Message::CopyAddress);
         let previous_page = ctx.link().callback(move |_| Message::Page(page - 1));
         let next_page = ctx.link().callback(move |_| Message::Page(page + 1));
         html! {
             <section class="section is-fullheight">
-            if let Some(status) = status {
-                <article class={ classes!("message", status.0) }>
-                    <div class="message-body">
-                        { status.1.clone() }
-                    </div>
-                </article>
-
-                if let None = ctx.props().api_key {
-                    <article class="message is-danger">
-                        <div class="message-body">
-                            { format!("Note: No API key has been configured for the etherscan.io API. Requests are \
-                            therefore throttled.",
-                            ) }
-                        </div>
-                    </article>
-                }
-            }
-
             if let Some(collection) = &self.collection {
                 <div class="columns collection-header">
                     <div class="column">
@@ -467,7 +505,7 @@ impl Component for Collection {
 }
 
 impl Collection {
-    pub(crate) fn add(&mut self, id: u32, mut metadata: Metadata) {
+    pub fn add(&mut self, id: u32, mut metadata: Metadata) {
         // Parse urls
         metadata.image = uri::parse(&metadata.image).map_or(metadata.image, |url| url.to_string());
         if let Some(animation_url) = &metadata.animation_url {
@@ -475,26 +513,15 @@ impl Collection {
                 .map_or(metadata.animation_url, |url| Some(url.to_string()));
         }
 
-        if let Some(models::Collection::Contract {
-            base_uri, address, ..
-        }) = self.collection.as_ref()
-        {
-            let url = base_uri
-                .as_ref()
-                .expect("expected a base uri")
-                .join(&id.to_string())
-                .expect("expected a valid url");
+        if let Some(collection) = self.collection.as_ref() {
             let token = models::Token {
-                url,
-                id: Some(id),
+                id,
                 metadata: Some(metadata),
                 last_viewed: None,
             };
 
-            storage::Token::insert(&TypeExtensions::format(address), token.clone());
+            storage::Token::store(collection.id().as_str(), token.clone());
             self.tokens.insert(id, token);
-        } else {
-            todo!()
         }
     }
 
@@ -504,17 +531,15 @@ impl Collection {
         tokens: &BTreeMap<u32, models::Token>,
         collection: &models::Collection,
     ) -> Html {
-        match collection {
-            models::Collection::Contract { address, .. } => {
-                tokens
-                    .values()
-                    .skip(page * page_size)
-                    .take(page_size)
-                    .map(|token| {
-                        html! {
+        tokens
+            .values()
+            .skip(page * page_size)
+            .take(page_size)
+            .map(|token| {
+                html! {
                 if let Some(metadata) = token.metadata.as_ref() {
                     <div class="column is-2">
-                        <Link<Route> to={ Route::token(&token, Some(*address)) }>
+                        <Link<Route> to={ Route::token(token, collection.id()) }>
                             <figure class="image">
                                 <img src={ metadata.image.clone() } alt={ metadata.name.clone() } />
                             </figure>
@@ -522,11 +547,8 @@ impl Collection {
                     </div>
                 }
             }
-                    })
-                    .collect::<Html>()
-            }
-            models::Collection::Url { .. } => { todo!()}
-        }
+            })
+            .collect::<Html>()
     }
 }
 
@@ -567,167 +589,5 @@ fn navigate(props: &NavigateProps) -> Html {
                 </div>
             </div>
         </div>
-    }
-}
-
-enum MessageStatus {
-    Info(String),
-    Success(String),
-    Warning(String),
-    Danger(String),
-}
-
-pub struct CollectionToken {
-    //_listener: HistoryListener,
-    base_uri: String,
-    start_token: u32,
-    error: Option<String>,
-    requesting_metadata: bool,
-    document: Document,
-    token_status_callback: Callback<Status>,
-    token_status: Status,
-}
-
-pub enum CollectionTokenMessage {
-    Navigated,
-    TokenStatus(Status),
-}
-
-#[derive(PartialEq, Properties)]
-pub struct CollectionTokenProperties {
-    pub uri: String,
-    pub token: u32,
-}
-
-impl Component for CollectionToken {
-    type Message = CollectionTokenMessage;
-    type Properties = CollectionTokenProperties;
-
-    fn create(_ctx: &Context<Self>) -> Self {
-        let window = web_sys::window().expect("global window does not exists");
-        let document = window.document().expect("expecting a document on window");
-
-        //let link = _ctx.link().clone();
-        // let listener = _ctx.link().history().unwrap().listen(move || {
-        //     link.send_message(Msg::Navigated);
-        // });
-
-        Self {
-            //_listener: listener,
-            base_uri: _ctx.props().uri.to_string(),
-            start_token: 0,
-            error: None,
-            requesting_metadata: false,
-            document,
-            //token_uri: format!("{}{}", &_ctx.props().uri, _ctx.props().token),
-            token_status_callback: _ctx
-                .link()
-                .callback(|status| CollectionTokenMessage::TokenStatus(status)),
-            token_status: Status::NotStarted,
-        }
-    }
-
-    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
-        match msg {
-            CollectionTokenMessage::Navigated => {
-                // let location = ctx.link().location().unwrap();
-                // let route = location.route::<Route>().unwrap();
-                // if let Route::CollectionToken { uri, token } = route {
-                //     //self.token_uri = format!("{}{token}", uri::Uri::decode(&uri).unwrap());
-                // }
-                true
-            }
-            CollectionTokenMessage::TokenStatus(status) => {
-                if matches!(status, Status::NotFound) && ctx.props().token == 0 {
-                    let uri = &ctx.props().uri;
-                    let start_token = ctx.props().token + 1;
-                    if let Some(mut collection) = storage::Collection::get(uri.as_str()) {
-                        collection.increment_start_token(1);
-                        storage::Collection::store(collection);
-
-                        ctx.link().history().unwrap().push(Route::CollectionToken {
-                            uri: uri.clone(),
-                            token: start_token,
-                        });
-                    }
-                    return false;
-                }
-
-                self.token_status = status;
-                true
-            }
-        }
-    }
-
-    fn view(&self, ctx: &Context<Self>) -> Html {
-        let status = self.token_status_callback.clone();
-        let token = ctx.props().token;
-
-        html! {
-            <section class="section is-fullheight">
-                if let Some(error) = &self.error {
-                    <div class="notification is-danger">
-                      { error }
-                    </div>
-                }
-
-                // todo: raise up to navigation to optimise space
-                <div class="level is-mobile">
-                    <div class="level-left"></div>
-                    <div class="level-right">
-                        <div class="field has-addons">
-                            <div class="control">
-                                <Link<Route> classes="button"
-                                    to={Route::Collection { id: self.base_uri.clone() }}>
-                                    <span class="icon is-small has-tooltip-bottom" data-tooltip="View Collection">
-                                        <i class="fa-solid fa-grip"></i>
-                                    </span>
-                                </Link<Route>>
-                            </div>
-                            <div class="control">
-                                if token > 0 {
-                                    <Link<Route> classes="button is-primary" to={Route::CollectionToken {
-                                        uri: self.base_uri.clone(), token: token - 1 }}
-                                        disabled={ self.requesting_metadata || token == self.start_token }>
-                                        <span class="icon is-small">
-                                          <i class="fas fa-angle-left"></i>
-                                        </span>
-                                    </Link<Route>>
-                                }
-                            </div>
-                            <div class="control">
-                                <Link<Route> classes="button is-primary" to={Route::CollectionToken {
-                                    uri: self.base_uri.clone(), token: token + 1 }}
-                                    disabled={ self.requesting_metadata }>
-                                    <span class="icon is-small">
-                                      <i class="fas fa-angle-right"></i>
-                                    </span>
-                                </Link<Route>>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <Token token_uri={ self.base_uri.clone() } token_id={ ctx.props().token } {status} />
-
-                if matches!(self.token_status, Status::NotFound) && ctx.props().token != self.start_token {
-                    <article class="message is-primary">
-                        <div class="message-body">
-                            {"The requested token was not found. Have you reached the end of the collection? Click "}
-                            <Link<Route> to={Route::CollectionToken {
-                                uri: self.base_uri.clone(), token: self.start_token }}>
-                                {"here"}
-                            </Link<Route>>
-                            {" to return to the start of the collection."}
-                        </div>
-                    </article>
-                }
-            </section>
-        }
-    }
-
-    fn rendered(&mut self, _ctx: &Context<Self>, _first_render: bool) {
-        // Wire up full screen image modal
-        bulma::add_modals(&self.document);
     }
 }

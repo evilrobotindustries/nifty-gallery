@@ -11,7 +11,8 @@ use workers::etherscan::TypeExtensions;
 use yew::prelude::*;
 use yew_router::prelude::*;
 
-pub mod explorers;
+pub mod address;
+pub mod collection;
 pub mod token;
 
 #[function_component(Footer)]
@@ -55,15 +56,15 @@ fn collections() -> Vec<Html> {
 
     fn html<'a>(collections: impl Iterator<Item = &'a models::Collection>) -> Vec<Html> {
         collections
-            .map(|collection| {
-                let route = Route::collection(collection.id().as_str(), &collection);
-                html! {
-                    <Link<Route> to={route}>
-                        <div class="dropdown-item">
-                            { collection.name().unwrap().clone() }
-                        </div>
-                    </Link<Route>>
-                }
+            .filter_map(|c| {
+                c.name().map(|name| {
+                    let route = Route::Collection { id: c.id() };
+                    html! {
+                        <Link<Route> to={route}>
+                            <div class="dropdown-item">{ name }</div>
+                        </Link<Route>>
+                    }
+                })
             })
             .collect()
     }
@@ -198,13 +199,14 @@ pub fn search() -> yew::Html {
         } else if let Ok(uri) = uri::TokenUri::parse(&value, true) {
             if let Some(token) = uri.token {
                 history.clone().push(Route::CollectionToken {
-                    uri: uri.to_string().into(),
+                    id: uri.to_string().into(),
                     token,
                 })
             } else {
-                history.clone().push(Route::Token {
-                    uri: uri.to_string().into(),
-                })
+                todo!()
+                // history.clone().push(Route::Token {
+                //     uri: uri.to_string().into(),
+                // })
             }
         } else {
             todo!()

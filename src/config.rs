@@ -1,7 +1,7 @@
 use once_cell::sync::Lazy;
 
-pub(crate) const CORS_PROXY: &str = "https://proxy.evilrobot.industries/";
-pub(crate) static COLLECTIONS: Lazy<Vec<(&str, &str, &str, Option<u32>)>> = Lazy::new(|| {
+pub const CORS_PROXY: &str = "https://proxy.evilrobot.industries/";
+pub static COLLECTIONS: Lazy<Vec<(&str, &str, &str, Option<u32>)>> = Lazy::new(|| {
     vec![
         (
             "Azuki",
