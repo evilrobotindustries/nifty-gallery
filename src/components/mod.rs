@@ -4,6 +4,7 @@ use crate::storage::All;
 use crate::{models, storage, uri, Address, Route, Scroll};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
+use std::ops::Deref;
 use std::str::FromStr;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlInputElement, Node};
@@ -146,7 +147,7 @@ pub fn nav() -> yew::Html {
     }
 
     html! {
-        <nav class="navbar" role="navigation" aria-label="main navigation">
+        <nav class="navbar is-fixed-top" role="navigation" aria-label="main navigation">
             <div class="navbar-brand">
                 <Link<Route> classes={classes!("navbar-item")} to={Route::Home}>
                     { "NIFTY GALLERY" }
@@ -224,33 +225,34 @@ pub fn search() -> yew::Html {
         }
     });
     let on_focus_in = Callback::from(move |e: FocusEvent| {
-        let input: HtmlElement = e.target_unchecked_into();
-        let _ = input
-            .offset_parent()
-            .expect("could not find element parent")
-            .class_list()
-            .add_1("is-active");
+        e.target_unchecked_into::<HtmlElement>()
+            .closest(".dropdown")
+            .ok()
+            .and_then(|e| e)
+            .map(|e| e.class_list().add_1("is-active"));
     });
     let on_focus_out = Callback::from(move |e: FocusEvent| {
-        let input: HtmlElement = e.target_unchecked_into();
-        let parent = input
-            .offset_parent()
-            .expect("could not find element parent");
+        let dropdown = e
+            .target_unchecked_into::<HtmlElement>()
+            .closest(".dropdown")
+            .ok()
+            .and_then(|e| e)
+            .expect("could not find dropdown");
         // Ignore if related target
         if let Some(event_target) = e.related_target() {
             if let Some(node) = event_target.dyn_ref::<Node>() {
-                if parent.contains(Some(node)) {
+                if dropdown.contains(Some(node)) {
                     return;
                 }
             }
         }
-        let _ = parent.class_list().remove_1("is-active");
+        let _ = dropdown.class_list().remove_1("is-active");
     });
     html! {
         <div id="search" class="field is-horizontal">
             <div class="field-body">
-                <div class="field has-addons">
-                    <div class="control has-icons-left is-expanded dropdown"
+                <div class="field has-addons dropdown">
+                    <div class="control has-icons-left is-expanded"
                          onfocusin={ on_focus_in }
                          onfocusout={ on_focus_out }
                          aria-haspopup="true"
@@ -262,16 +264,17 @@ pub fn search() -> yew::Html {
                         <span class="icon is-small is-left">
                             <i class="fas fa-globe"></i>
                         </span>
-                        <div class="dropdown-menu" id="dropdown-menu" role="menu">
-                            <div class="dropdown-content">
-                                { collections() }
-                            </div>
-                        </div>
                     </div>
                     <div class="control">
                         <a href="javascript:void(0);" class="button is-primary">
                             {"Explore"}
                         </a>
+                    </div>
+
+                    <div class="dropdown-menu" id="dropdown-menu" role="menu">
+                        <div class="dropdown-content">
+                            { collections() }
+                        </div>
                     </div>
                 </div>
             </div>

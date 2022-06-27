@@ -401,7 +401,7 @@ impl Component for Token {
         let start_token = self.collection.as_ref().map_or(0, |c| *c.start_token());
 
         html! {
-            <section class="section is-fullheight">
+            <section id="piece" class="section is-fullheight">
                 // Collection navigation
                 <Navigate collection={ ctx.props().collection.clone() } token={ ctx.props().token }
                     working={ self.working } { start_token } />

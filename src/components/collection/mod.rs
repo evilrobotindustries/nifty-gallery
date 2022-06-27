@@ -1,5 +1,5 @@
 use crate::storage::Get;
-use crate::{models, notifications, storage, uri, Address, Route};
+use crate::{models, notifications, storage, uri, Address, Route, Scroll};
 use bulma::toast::Color;
 use std::rc::Rc;
 use std::str::FromStr;
@@ -68,6 +68,15 @@ impl Component for Collection {
             None => {
                 // Check if identifier is an address
                 if let Ok(address) = Address::from_str(&ctx.props().id) {
+                    collection = Some(models::Collection::Contract {
+                        address,
+                        name: TypeExtensions::format(&address),
+                        base_uri: None,
+                        start_token: 0,
+                        total_supply: None,
+                        last_viewed: None,
+                    });
+
                     if let None = ctx.props().api_key {
                         ctx.link().send_message(Message::MissingApiKey);
                     }
@@ -181,7 +190,7 @@ impl Component for Collection {
             notified_indexing: false,
             indexed: 0,
             page: 1,
-            page_size: 36,
+            page_size: 25,
             working: false,
         }
     }
@@ -403,7 +412,12 @@ impl Component for Collection {
                 self.add(token, metadata);
                 if token < 1000 {
                     if !self.notified_indexing {
-                        notifications::notify("Indexing collection...".to_string(), None);
+                        let message = if url.contains("ipfs") {
+                            "Indexing collection from IPFS, this may take some time..."
+                        } else {
+                            "Indexing collection..."
+                        };
+                        notifications::notify(message.to_string(), None);
                         self.notified_indexing = true;
                     }
 
@@ -458,72 +472,89 @@ impl Component for Collection {
     fn view(&self, ctx: &Context<Self>) -> Html {
         let page = self.page;
         let copy_address = ctx.link().callback(move |_| Message::CopyAddress);
-        let previous_page = ctx.link().callback(move |_| Message::Page(page - 1));
-        let next_page = ctx.link().callback(move |_| Message::Page(page + 1));
+        let previous_page = ctx.link().callback(move |_| {
+            if let Some(window) = web_sys::window() {
+                Scroll::top(&window);
+            }
+            Message::Page(page - 1)
+        });
+        let next_page = ctx.link().callback(move |_| {
+            if let Some(window) = web_sys::window() {
+                Scroll::top(&window);
+            }
+            Message::Page(page + 1)
+        });
+        let image_onload = Callback::from(move |e: web_sys::Event| {
+            if let Some(figure) = e
+                .target_unchecked_into::<web_sys::HtmlElement>()
+                .offset_parent()
+            {
+                figure.class_list().remove_1("is-square");
+            }
+        });
 
         html! {
-            <section class="section is-fullheight">
+            <div id="collection">
             if let Some(collection) = &self.collection {
-                <div class="columns collection-header">
-                    <div class="column">
-                        if let Some(name) = collection.name() {
-                            <h1 class="title nifty-name">{ name.clone() }</h1>
-                        }
-                        <div class="level is-mobile">
-                            <div class="level-left">
-                                if let models::Collection::Contract{ address, ..} = collection {
-                                    <div class="level-item no-space">
-                                        <p class="has-tooltip-right" data-tooltip={ TypeExtensions::format(address) } >
-                                            { address.to_string() }
-                                        </p>
-                                    </div>
-                                    <div class="level-item">
-                                        <button onclick={ copy_address } class="button">
-                                            <span class="icon is-small">
-                                              <i class="fa-regular fa-clone"></i>
-                                            </span>
-                                        </button>
-                                    </div>
-                                }
-                                <span class="level-item">
-                                    { self.indexed.separate_with_commas() }
-                                    if let Some(total_supply) = collection.total_supply() {
-                                        {" / "}{ total_supply.separate_with_commas() }
+                <section class="section is-header">
+                    <div class="columns">
+                        <div class="column">
+                            if let Some(name) = collection.name() {
+                                <h1 class="title nifty-name">{ name.clone() }</h1>
+                            }
+                            <div class="level is-mobile">
+                                <div class="level-left">
+                                    if let models::Collection::Contract{ address, ..} = collection {
+                                        <div class="level-item no-space">
+                                            <p class="has-tooltip-right" data-tooltip={ TypeExtensions::format(address) } >
+                                                { address.to_string() }
+                                            </p>
+                                        </div>
+                                        <div class="level-item">
+                                            <button onclick={ copy_address } class="button">
+                                                <span class="icon is-small">
+                                                  <i class="fa-regular fa-clone"></i>
+                                                </span>
+                                            </button>
+                                        </div>
                                     }
-                                    {" items"}
-                                </span>
-                                if self.working {
-                                    <div class="is-loading level-item"></div>
-                                }
+                                    <span class="level-item">
+                                        { self.indexed.separate_with_commas() }
+                                        if let Some(total_supply) = collection.total_supply() {
+                                            {" / "}{ total_supply.separate_with_commas() }
+                                        }
+                                        {" items"}
+                                    </span>
+                                    if self.working {
+                                        <div class="is-loading level-item"></div>
+                                    }
+                                </div>
                             </div>
                         </div>
+                        <div class="column">
+                            <Navigate { page } page_size={ self.page_size } items={ self.indexed }
+                                previous={ previous_page.clone() } next={ next_page.clone() } />
+                        </div>
                     </div>
-                    <div class="column">
-                        <Navigate { page } page_size={ self.page_size } items={ self.indexed }
-                            previous={ previous_page.clone() } next={ next_page.clone() } />
-                    </div>
-                </div>
+                </section>
 
                 // Collection page
-                <div class="table-container">
-                <div class="columns is-multiline">{ self.tokens.iter().filter_map(|token| token.metadata.as_ref()
-                    .map(|metadata| html! {
-                        <div class="column is-2">
-                            <Link<Route> to={ Route::token(token, collection.id()) }>
-                                <figure class="image">
-                                    <img src={ metadata.image.clone() } alt={ metadata.name.clone() } />
-                                </figure>
-                            </Link<Route>>
-                        </div>
-                    })).collect::<Html>()  }
-                </div>
-                </div>
-
-                // Bottom navigation
-                <Navigate { page } page_size={ self.page_size } items={ self.indexed }
-                    previous={ previous_page } next={ next_page } />
+                <section class="section">
+                    <div class="columns is-multiline">{ self.tokens.iter().filter_map(|token| token.metadata.as_ref()
+                        .map(|metadata| html! {
+                            <div class="column is-one-fifth">
+                                <Link<Route> to={ Route::token(token, collection.id()) }>
+                                    <figure class="image is-square">
+                                        <img src={ metadata.image.clone() } alt={ metadata.name.clone() }
+                                             onload={ image_onload.clone() } />
+                                    </figure>
+                                </Link<Route>>
+                            </div>
+                        })).collect::<Html>()  }
+                    </div>
+                </section>
             }
-            </section>
+            </div>
         }
     }
 }

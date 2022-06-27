@@ -69,6 +69,15 @@ impl Component for Token {
 
     fn view(&self, ctx: &Context<Self>) -> Html {
         let props = ctx.props();
+        let image_onload = Callback::from(move |e: web_sys::Event| {
+            if let Some(figure) = e
+                .target_unchecked_into::<web_sys::HtmlElement>()
+                .offset_parent()
+            {
+                figure.class_list().remove_1("is-square");
+            }
+        });
+
         html! {
             if let Some(metadata) = props.token.metadata.as_ref() {
                 <div class="card columns">
@@ -96,9 +105,9 @@ impl Component for Token {
                 }
                 else {
                     <div class="column">
-                        <figure class="image">
+                        <figure class="image is-square">
                             <img src={ metadata.image.clone() } alt={ metadata.name.clone() } class="modal-button"
-                                 data-target="nifty-image" />
+                                 data-target="nifty-image" onload={ image_onload.clone() } />
                         </figure>
                         <div id="nifty-image" class="modal modal-fx-3dFlipHorizontal">
                             <div class="modal-background"></div>
