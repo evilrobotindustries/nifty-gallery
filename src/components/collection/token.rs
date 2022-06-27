@@ -1,13 +1,11 @@
 use crate::{
-    components::token, components::token::Status, models, models::Collection, notifications,
-    notifications::Color, storage, storage::Get, uri, Address, Route,
+    components::token, models, notifications, notifications::Color, storage, storage::Get, uri,
+    Address, Route,
 };
-use base64::DecodeError;
 use std::rc::Rc;
 use std::str::FromStr;
-use web_sys::Document;
 use workers::metadata::Metadata;
-use workers::{etherscan, metadata, Bridge, Bridged, ParseError, Url};
+use workers::{etherscan, metadata, Bridge, Bridged, Url};
 use yew::prelude::*;
 use yew_router::prelude::*;
 
@@ -56,9 +54,6 @@ impl Component for Token {
     type Properties = Properties;
 
     fn create(ctx: &Context<Self>) -> Self {
-        let window = web_sys::window().expect("global window does not exists");
-        let document = window.document().expect("expecting a document on window");
-
         let mut collection = storage::Collection::get(ctx.props().collection.as_str());
         let token = storage::Token::get(ctx.props().collection.as_str(), ctx.props().token);
 
@@ -85,12 +80,12 @@ impl Component for Token {
                                     .send_message(Message::RequestMetadata(ctx.props().token))
                             }
                             Err(e) => {
-                                log::error!("unable to parse the collection url '{url}'")
+                                log::error!("unable to parse the collection url '{url}': {e:?}")
                             }
                         },
                         Err(e) => {
                             log::error!(
-                                "unable to decode the collection identifier '{}'",
+                                "unable to decode the collection identifier '{}': {e:?}",
                                 ctx.props().collection
                             )
                         }

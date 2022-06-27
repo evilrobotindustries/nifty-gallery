@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use workers::etherscan::TypeExtensions;
 use workers::metadata::Metadata;
-use workers::{ParseError, Url};
+use workers::Url;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub enum Collection {

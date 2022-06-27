@@ -1,2 +1,3 @@
 [build]
 rustflags = ["--cfg=web_sys_unstable_apis"] # enable for clipboard support
+target = "wasm32-unknown-unknown"

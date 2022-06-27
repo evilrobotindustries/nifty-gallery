@@ -1,7 +1,7 @@
 use crate::components::token::RecentTokens;
 use crate::models::Collection;
 use crate::storage::All;
-use crate::{models, storage, uri, Address, Route};
+use crate::{models, storage, uri, Address, Route, Scroll};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 use std::str::FromStr;
@@ -133,6 +133,17 @@ pub fn nav() -> yew::Html {
         bulma::add_navigation_listeners(&document);
         || ()
     });
+
+    // Scroll to top of page on navigation
+    if let Some(history) = use_history() {
+        use_state(|| {
+            history.listen(|| {
+                if let Some(window) = web_sys::window() {
+                    Scroll::top(&window);
+                }
+            })
+        });
+    }
 
     html! {
         <nav class="navbar" role="navigation" aria-label="main navigation">

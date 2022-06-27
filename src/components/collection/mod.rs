@@ -1,8 +1,6 @@
-use crate::notifications::notify;
 use crate::storage::Get;
 use crate::{models, notifications, storage, uri, Address, Route};
 use bulma::toast::Color;
-use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::str::FromStr;
 use thousands::Separable;
@@ -18,8 +16,9 @@ pub struct Collection {
     etherscan: Box<dyn Bridge<etherscan::Worker>>,
     metadata: Box<dyn Bridge<metadata::Worker>>,
     collection: Option<models::Collection>,
-    tokens: BTreeMap<u32, models::Token>,
+    tokens: Vec<models::Token>,
     notified_indexing: bool,
+    indexed: usize,
     page: usize,
     page_size: usize,
     working: bool,
@@ -65,7 +64,6 @@ impl Component for Collection {
     fn create(ctx: &Context<Self>) -> Self {
         // Check if collection already exists locally
         let mut collection = storage::Collection::get(ctx.props().id.as_str());
-        let mut tokens = None;
         match collection.as_mut() {
             None => {
                 // Check if identifier is an address
@@ -92,12 +90,12 @@ impl Component for Collection {
                                 ctx.link().send_message(Message::RequestMetadata(0))
                             }
                             Err(e) => {
-                                log::error!("unable to parse the collection url '{url}'")
+                                log::error!("unable to parse the collection url '{url}': {e:?}")
                             }
                         },
                         Err(e) => {
                             log::error!(
-                                "unable to decode the collection identifier '{}'",
+                                "unable to decode the collection identifier '{}': {e:?}",
                                 ctx.props().id
                             )
                         }
@@ -134,13 +132,8 @@ impl Component for Collection {
                         .send_message(Message::RequestMetadata(start_token.clone())),
                 }
 
-                // Initialise tokens from any previously stored
-                tokens = Some(
-                    storage::Token::all(collection.id().as_str())
-                        .into_iter()
-                        .map(|t| (t.id, t))
-                        .collect(),
-                );
+                // Initialise first page
+                ctx.link().send_message(Message::Page(1));
 
                 // Update last viewed on collection and store
                 collection.set_last_viewed();
@@ -184,8 +177,9 @@ impl Component for Collection {
                 }
             })),
             collection,
-            tokens: tokens.unwrap_or_else(|| BTreeMap::new()),
+            tokens: Vec::new(),
             notified_indexing: false,
+            indexed: 0,
             page: 1,
             page_size: 36,
             working: false,
@@ -363,19 +357,30 @@ impl Component for Collection {
             }
             // Metadata
             Message::RequestMetadata(token) => {
-                // Check if token already exists
-                if self.tokens.contains_key(&token) {
+                // Check if token already exists in current view
+                if self.tokens.iter().any(|t| t.id == token) {
                     // Request next token
                     ctx.link().send_message(Message::RequestMetadata(token + 1));
-                } else if let Some(url) = self.collection.as_ref().and_then(|c| c.url(token)) {
-                    self.metadata.send(metadata::Request {
-                        url,
-                        token: Some(token),
-                        cors_proxy: Some(crate::config::CORS_PROXY.to_string()),
-                    });
-                    self.working = true;
-                    return true;
+                } else {
+                    if let Some(collection) = self.collection.as_ref() {
+                        // Check if token already exists within storage
+                        if let Some(t) = storage::Token::get(collection.id().as_str(), token) {
+                            // Request next token
+                            ctx.link().send_message(Message::RequestMetadata(token + 1));
+                        }
+                        // Otherwise request metadata
+                        else if let Some(url) = collection.url(token) {
+                            self.metadata.send(metadata::Request {
+                                url,
+                                token: Some(token),
+                                cors_proxy: Some(crate::config::CORS_PROXY.to_string()),
+                            });
+                            self.working = true;
+                            return true;
+                        }
+                    }
                 }
+
                 false
             }
             Message::Metadata(url, token, metadata) => {
@@ -435,6 +440,14 @@ impl Component for Collection {
             // Paging
             Message::Page(page) => {
                 self.page = page;
+
+                if let Some(collection) = self.collection.as_ref() {
+                    let (page, total) =
+                        storage::Token::page(collection.id().as_str(), page - 1, self.page_size);
+                    self.tokens = page;
+                    self.indexed = total;
+                }
+
                 true
             }
             // Ignore
@@ -447,6 +460,7 @@ impl Component for Collection {
         let copy_address = ctx.link().callback(move |_| Message::CopyAddress);
         let previous_page = ctx.link().callback(move |_| Message::Page(page - 1));
         let next_page = ctx.link().callback(move |_| Message::Page(page + 1));
+
         html! {
             <section class="section is-fullheight">
             if let Some(collection) = &self.collection {
@@ -455,7 +469,7 @@ impl Component for Collection {
                         if let Some(name) = collection.name() {
                             <h1 class="title nifty-name">{ name.clone() }</h1>
                         }
-                        <div class="level">
+                        <div class="level is-mobile">
                             <div class="level-left">
                                 if let models::Collection::Contract{ address, ..} = collection {
                                     <div class="level-item no-space">
@@ -472,7 +486,7 @@ impl Component for Collection {
                                     </div>
                                 }
                                 <span class="level-item">
-                                    { self.tokens.len().separate_with_commas() }
+                                    { self.indexed.separate_with_commas() }
                                     if let Some(total_supply) = collection.total_supply() {
                                         {" / "}{ total_supply.separate_with_commas() }
                                     }
@@ -485,18 +499,28 @@ impl Component for Collection {
                         </div>
                     </div>
                     <div class="column">
-                        <Navigate { page } page_size={ self.page_size } items={ self.tokens.len() }
+                        <Navigate { page } page_size={ self.page_size } items={ self.indexed }
                             previous={ previous_page.clone() } next={ next_page.clone() } />
                     </div>
                 </div>
 
                 // Collection page
-                <div class="columns is-multiline">
-                    { Collection::page(page - 1, self.page_size, &self.tokens, collection) }
+                <div class="table-container">
+                <div class="columns is-multiline">{ self.tokens.iter().filter_map(|token| token.metadata.as_ref()
+                    .map(|metadata| html! {
+                        <div class="column is-2">
+                            <Link<Route> to={ Route::token(token, collection.id()) }>
+                                <figure class="image">
+                                    <img src={ metadata.image.clone() } alt={ metadata.name.clone() } />
+                                </figure>
+                            </Link<Route>>
+                        </div>
+                    })).collect::<Html>()  }
+                </div>
                 </div>
 
                 // Bottom navigation
-                <Navigate { page } page_size={ self.page_size } items={ self.tokens.len() }
+                <Navigate { page } page_size={ self.page_size } items={ self.indexed }
                     previous={ previous_page } next={ next_page } />
             }
             </section>
@@ -520,35 +544,14 @@ impl Collection {
                 last_viewed: None,
             };
 
-            storage::Token::store(collection.id().as_str(), token.clone());
-            self.tokens.insert(id, token);
-        }
-    }
+            self.indexed = storage::Token::store(collection.id().as_str(), token.clone());
 
-    fn page(
-        page: usize,
-        page_size: usize,
-        tokens: &BTreeMap<u32, models::Token>,
-        collection: &models::Collection,
-    ) -> Html {
-        tokens
-            .values()
-            .skip(page * page_size)
-            .take(page_size)
-            .map(|token| {
-                html! {
-                if let Some(metadata) = token.metadata.as_ref() {
-                    <div class="column is-2">
-                        <Link<Route> to={ Route::token(token, collection.id()) }>
-                            <figure class="image">
-                                <img src={ metadata.image.clone() } alt={ metadata.name.clone() } />
-                            </figure>
-                        </Link<Route>>
-                    </div>
-                }
+            let page_start = ((self.page - 1) * self.page_size) as u32 + *collection.start_token();
+            let page_end = page_start + self.page_size as u32;
+            if token.id >= page_start && token.id < page_end {
+                self.tokens.push(token);
             }
-            })
-            .collect::<Html>()
+        }
     }
 }
 

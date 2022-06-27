@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
-use workers::etherscan::TypeExtensions;
 use workers::{etherscan, metadata, Bridge, Bridged};
 use yew::prelude::*;
 use yew_router::prelude::*;
@@ -25,7 +24,7 @@ impl Component for App {
     type Message = ();
     type Properties = ();
 
-    fn create(_: &Context<Self>) -> Self {
+    fn create(_ctx: &Context<Self>) -> Self {
         if let Err(e) = yew_router_qs::try_route_from_query_string() {
             log::error!("{:?}", e)
         }
@@ -104,5 +103,16 @@ fn switch(routes: &Route) -> Html {
           //         </section>
           //     }
           // }
+    }
+}
+
+pub struct Scroll {}
+
+impl Scroll {
+    fn top(window: &web_sys::Window) {
+        let mut scroll_options = web_sys::ScrollToOptions::new();
+        scroll_options.top(0.0);
+        scroll_options.behavior(web_sys::ScrollBehavior::Smooth);
+        window.scroll_to_with_scroll_to_options(&scroll_options);
     }
 }

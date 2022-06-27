@@ -2,7 +2,7 @@ use crate::{models, Address, Route};
 use gloo_storage::{LocalStorage, Storage};
 use indexmap::IndexSet;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use workers::etherscan::TypeExtensions;
 
 pub trait Get<I, T> {
@@ -113,20 +113,35 @@ impl Token {
     const TOKEN: &'static str = "T";
     const COLLECTION_TOKENS: &'static str = "CT";
 
-    pub fn all(collection: &str) -> Vec<models::Token> {
-        Token::collection(collection)
-            .iter()
-            .map(|token| Token::get(collection, *token))
-            .filter(|t| t.is_some())
-            .map(|t| t.unwrap())
-            .collect()
+    pub fn page(collection: &str, page: usize, page_size: usize) -> (Vec<models::Token>, usize) {
+        let tokens = Token::collection(collection);
+        (
+            tokens
+                .iter()
+                .skip(page * page_size)
+                .take(page_size)
+                .map(|token| Token::get(collection, *token))
+                .filter(|t| t.is_some())
+                .map(|t| t.unwrap())
+                .collect(),
+            tokens.len(),
+        )
+    }
+
+    pub fn count(collection: &str) -> usize {
+        Token::collection(collection).len()
+    }
+
+    fn collection(collection: &str) -> BTreeSet<u32> {
+        LocalStorage::get(format!("{}:{collection}", Self::COLLECTION_TOKENS))
+            .unwrap_or_else(|_| BTreeSet::new())
     }
 
     pub fn get(collection: &str, token: u32) -> Option<models::Token> {
         LocalStorage::get(format!("{}:{collection}:{token}", Self::TOKEN)).ok()
     }
 
-    pub fn store(collection: &str, token: models::Token) {
+    pub fn store(collection: &str, token: models::Token) -> usize {
         let id = token.id;
         if let Err(e) = LocalStorage::set(format!("{}:{collection}:{}", Self::TOKEN, id), token) {
             log::error!("An error occurred whilst storing the token: {:?}", e)
@@ -135,6 +150,7 @@ impl Token {
         // Add to collection
         let mut collection_tokens = Token::collection(collection);
         collection_tokens.insert(id);
+        let total = collection_tokens.len();
         if let Err(e) = LocalStorage::set(
             format!("{}:{collection}", Self::COLLECTION_TOKENS),
             collection_tokens,
@@ -144,10 +160,6 @@ impl Token {
                 e
             )
         }
-    }
-
-    fn collection(collection: &str) -> HashSet<u32> {
-        LocalStorage::get(format!("{}:{collection}", Self::COLLECTION_TOKENS))
-            .unwrap_or_else(|_| HashSet::new())
+        total
     }
 }

@@ -26,7 +26,10 @@ serde = { version = "1.0.137", features = ["derive"] }
 thousands = "0.2.0"
 wasm-bindgen = "0.2.80"
 wasm-logger = "0.2.0"
-web-sys = { version = "0.3.58", features = ["Clipboard", "HtmlInputElement", "Location", "Navigator"] }
+web-sys = { version = "0.3.58", features = ["Clipboard", "HtmlInputElement",
+    "Location", "Navigator",
+    "ScrollBehavior",
+    "ScrollToOptions", "Window"] }
 wee_alloc = "0.4.5"
 workers = { path = "workers" }
 yew = "0.19.3"
