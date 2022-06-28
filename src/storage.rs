@@ -83,11 +83,14 @@ impl RecentlyViewed {
         LocalStorage::get(Self::STORAGE_KEY)
     }
 
-    pub fn insert(item: RecentlyViewedItem) {
+    pub fn store(item: RecentlyViewedItem) {
         let mut data = Self::data().unwrap_or(IndexSet::new());
         while data.len() >= Self::MAX_ITEMS {
             // Remove the oldest items
             data.shift_remove_index(0);
+        }
+        if data.contains(&item) {
+            data.remove(&item);
         }
         data.insert(item);
         if let Err(e) = LocalStorage::set(Self::STORAGE_KEY, data) {
@@ -126,10 +129,6 @@ impl Token {
                 .collect(),
             tokens.len(),
         )
-    }
-
-    pub fn count(collection: &str) -> usize {
-        Token::collection(collection).len()
     }
 
     fn collection(collection: &str) -> BTreeSet<u32> {

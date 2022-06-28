@@ -1,10 +1,8 @@
-use crate::{models, storage, Route};
-use bulma::carousel::Options;
+use crate::models;
 use itertools::Itertools;
 use std::rc::Rc;
 use workers::{qr, Bridge, Bridged};
 use yew::prelude::*;
-use yew_router::prelude::*;
 
 pub struct Token {
     qr: Box<dyn Bridge<qr::Worker>>,
@@ -74,7 +72,7 @@ impl Component for Token {
                 .target_unchecked_into::<web_sys::HtmlElement>()
                 .offset_parent()
             {
-                figure.class_list().remove_1("is-square");
+                let _ = figure.class_list().remove_1("is-square");
             }
         });
 
@@ -242,39 +240,5 @@ impl Properties {
                 None => None,
                 Some(animation_url) => Some((animation_url.clone(), metadata.image.clone())),
             })
-    }
-}
-
-#[function_component(RecentTokens)]
-pub fn recent_tokens() -> yew::Html {
-    use_effect(move || {
-        // Attach carousel after component is rendered
-        bulma::carousel::attach(Some("#recent-views"), Some(Options { slides_to_show: 4 }));
-        || {}
-    });
-    let slides: Option<Vec<Html>> = storage::RecentlyViewed::values().map_or(None, |recent| {
-        Some(
-            recent
-                .into_iter()
-                .rev()
-                .map(|item| {
-                    html! {
-                        <Link<Route> to={ item.route }>
-                            <figure class="image">
-                                <img src={ item.image } alt={ item.name } />
-                            </figure>
-                        </Link<Route>>
-                    }
-                })
-                .collect(),
-        )
-    });
-    html! {
-        if let Some(slides) = slides {
-            <p class="subtitle">{"Recently Viewed"}</p>
-            <div id="recent-views">
-                { slides }
-            </div>
-        }
     }
 }

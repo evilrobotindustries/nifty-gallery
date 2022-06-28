@@ -373,7 +373,7 @@ impl Component for Collection {
                 } else {
                     if let Some(collection) = self.collection.as_ref() {
                         // Check if token already exists within storage
-                        if let Some(t) = storage::Token::get(collection.id().as_str(), token) {
+                        if let Some(_token) = storage::Token::get(collection.id().as_str(), token) {
                             // Request next token
                             ctx.link().send_message(Message::RequestMetadata(token + 1));
                         }
@@ -410,20 +410,18 @@ impl Component for Collection {
                 self.working = false;
                 // Add token to collection and request next item
                 self.add(token, metadata);
-                if token < 1000 {
-                    if !self.notified_indexing {
-                        let message = if url.contains("ipfs") {
-                            "Indexing collection from IPFS, this may take some time..."
-                        } else {
-                            "Indexing collection..."
-                        };
-                        notifications::notify(message.to_string(), None);
-                        self.notified_indexing = true;
-                    }
-
-                    ctx.link().send_message(Message::RequestMetadata(token + 1));
-                    self.working = true;
+                if !self.notified_indexing {
+                    let message = if url.contains("ipfs") {
+                        "Indexing collection from IPFS, this may take some time..."
+                    } else {
+                        "Indexing collection..."
+                    };
+                    notifications::notify(message.to_string(), None);
+                    self.notified_indexing = true;
                 }
+
+                ctx.link().send_message(Message::RequestMetadata(token + 1));
+                self.working = true;
                 true
             }
             Message::NotFound(token) | Message::MetadataFailed(token) => {
@@ -489,7 +487,7 @@ impl Component for Collection {
                 .target_unchecked_into::<web_sys::HtmlElement>()
                 .offset_parent()
             {
-                figure.class_list().remove_1("is-square");
+                let _ = figure.class_list().remove_1("is-square");
             }
         });
 
@@ -526,7 +524,7 @@ impl Component for Collection {
                                         {" items"}
                                     </span>
                                     if self.working {
-                                        <div class="is-loading level-item"></div>
+                                        <i class="is-loading level-item"></i>
                                     }
                                 </div>
                             </div>

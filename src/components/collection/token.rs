@@ -1,3 +1,4 @@
+use crate::storage::RecentlyViewedItem;
 use crate::{
     components::token, models, notifications, notifications::Color, storage, storage::Get, uri,
     Address, Route,
@@ -37,6 +38,8 @@ pub enum Message {
     Metadata(String, u32, Metadata),
     NotFound(u32),
     MetadataFailed(u32),
+    // Viewed
+    Viewed(String, u32, String, String),
     // Ignore
     None,
 }
@@ -103,6 +106,19 @@ impl Component for Token {
                         .send_message(Message::RequestMetadata(ctx.props().token))
                 }
             }
+        }
+        if let Some(metadata) = token.as_ref().and_then(|t| t.metadata.as_ref()) {
+            // Add to recently viewed
+            ctx.link().send_message(Message::Viewed(
+                ctx.props().collection.clone(),
+                ctx.props().token,
+                metadata
+                    .name
+                    .as_ref()
+                    .unwrap_or(&ctx.props().token.to_string())
+                    .to_string(),
+                metadata.image.clone(),
+            ));
         }
 
         Self {
@@ -322,8 +338,23 @@ impl Component for Token {
                             self.working = true;
                         }
                     }
-                    Some(token) => {
-                        self.token = Some(token);
+                    Some(t) => {
+                        // Add to recently viewed
+                        if let Some(metadata) = &t.metadata {
+                            log::trace!("adding token to recently viewed...");
+                            ctx.link().send_message(Message::Viewed(
+                                ctx.props().collection.clone(),
+                                token,
+                                metadata
+                                    .name
+                                    .as_ref()
+                                    .unwrap_or(&token.to_string())
+                                    .to_string(),
+                                metadata.image.clone(),
+                            ));
+                        }
+
+                        self.token = Some(t);
                         self.working = false;
                     }
                 }
@@ -344,6 +375,18 @@ impl Component for Token {
                     );
                     return false;
                 }
+
+                // Add to recently viewed
+                ctx.link().send_message(Message::Viewed(
+                    ctx.props().collection.clone(),
+                    token,
+                    metadata
+                        .name
+                        .as_ref()
+                        .unwrap_or(&token.to_string())
+                        .to_string(),
+                    metadata.image.clone(),
+                ));
 
                 // Initialise token
                 let token = models::Token::new(token, metadata);
@@ -376,6 +419,18 @@ impl Component for Token {
                     }
                 }
                 true
+            }
+            // Viewed
+            Message::Viewed(collection, token, name, image) => {
+                storage::RecentlyViewed::store(RecentlyViewedItem {
+                    name,
+                    image,
+                    route: Route::CollectionToken {
+                        id: collection,
+                        token,
+                    },
+                });
+                false
             }
             // Ignore
             Message::None => false,

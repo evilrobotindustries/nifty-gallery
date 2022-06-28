@@ -1,10 +1,8 @@
-use crate::components::token::RecentTokens;
 use crate::models::Collection;
 use crate::storage::All;
 use crate::{models, storage, uri, Address, Route, Scroll};
 use itertools::Itertools;
 use once_cell::sync::Lazy;
-use std::ops::Deref;
 use std::str::FromStr;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlElement, HtmlInputElement, Node};
@@ -37,14 +35,18 @@ pub fn home() -> yew::Html {
         <section class="hero is-fullheight">
             <div class="hero-body">
                 <div class="container has-text-centered">
-                    <div class="column is-6 is-offset-3">
-                        <p class="subtitle">
-                            { "Nifty Gallery, a tool for exploring NFT collections." }
-                        </p>
-                        <Search />
-                    </div>
-                    <section class="section" style="overflow:hidden">
-                        <RecentTokens />
+                    <section class="section">
+                        <div class="column is-6 is-offset-3">
+                            <p class="subtitle">
+                                { "Nifty Gallery, a tool for exploring NFT collections." }
+                            </p>
+                            <Search />
+                        </div>
+                    </section>
+                    <section class="section" style="overflow:hidden;">
+                        <div class="container">
+                            <RecentlyViewed />
+                        </div>
                     </section>
                 </div>
             </div>
@@ -193,6 +195,41 @@ pub fn not_found() -> yew::Html {
                 </div>
             </div>
         </section>
+    }
+}
+
+#[function_component(RecentlyViewed)]
+pub fn recently_viewed() -> yew::Html {
+    use_effect(move || {
+        // Attach carousel after component is rendered
+        bulma::carousel::attach(
+            Some(".carousel"),
+            Some(bulma::carousel::Options { slides_to_show: 4 }),
+        );
+        || {}
+    });
+    let slides: Option<Vec<Html>> = storage::RecentlyViewed::values().map_or(None, |recent| {
+        Some(
+            recent
+                .into_iter()
+                .rev()
+                .map(|item| {
+                    html! {
+                        <Link<Route> to={ item.route }>
+                            <figure class="image is-square">
+                                <img src={ item.image } alt={ item.name } />
+                            </figure>
+                        </Link<Route>>
+                    }
+                })
+                .collect(),
+        )
+    });
+    html! {
+        if let Some(slides) = slides {
+            <p class="subtitle">{"Recently Viewed"}</p>
+            <div class="carousel">{ slides }</div>
+        }
     }
 }
 

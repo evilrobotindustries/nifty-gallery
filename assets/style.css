@@ -124,6 +124,14 @@ a.navbar-item:hover, a.navbar-item:focus {
     box-shadow: none !important;
 }
 
+.carousel .slider-item {
+    padding: 0.5rem;
+}
+.carousel img {
+    box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.2), 0 1.5px 5px 0 rgba(0, 0, 0, 0.19);
+    background-color: whitesmoke;
+}
+
 .field-label {
     max-width: 30px;
 }
@@ -216,7 +224,7 @@ section.is-header {
     font-weight: bold;
 }
 
-.is-loading {
+i.is-loading {
     -webkit-animation: spinAround .5s infinite linear;
     animation: spinAround .5s infinite linear;
     border: 2px solid #dbdbdb;
