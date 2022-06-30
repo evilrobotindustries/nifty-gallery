@@ -410,18 +410,21 @@ impl Component for Collection {
                 self.working = false;
                 // Add token to collection and request next item
                 self.add(token, metadata);
-                if !self.notified_indexing {
-                    let message = if url.contains("ipfs") {
-                        "Indexing collection from IPFS, this may take some time..."
-                    } else {
-                        "Indexing collection..."
-                    };
-                    notifications::notify(message.to_string(), None);
-                    self.notified_indexing = true;
-                }
+                if token < 1000 {
+                    // limit to 1k for now
+                    if !self.notified_indexing {
+                        let message = if url.contains("ipfs") {
+                            "Indexing collection from IPFS, this may take some time..."
+                        } else {
+                            "Indexing collection..."
+                        };
+                        notifications::notify(message.to_string(), None);
+                        self.notified_indexing = true;
+                    }
 
-                ctx.link().send_message(Message::RequestMetadata(token + 1));
-                self.working = true;
+                    ctx.link().send_message(Message::RequestMetadata(token + 1));
+                    self.working = true;
+                }
                 true
             }
             Message::NotFound(token) | Message::MetadataFailed(token) => {
