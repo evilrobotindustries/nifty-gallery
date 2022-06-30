@@ -1,13 +1,11 @@
 
+# Nifty Gallery
 
-# Local Metadata
-Local metadata can be served via a web server such as [Static Web Server](https://sws.joseluisq.net).
+Nifty Gallery is a tool for exploring NFT collections using Rust WebAssembly. The site can be viewed at https://niftygallery.evilrobot.industries and is still a work in progress.
 
-    static-web-server --log-level info \
-                      --cache-control-headers false \
-                      --directory-listing true \
-                      --cors-allow-origins * \
-                      --root . \
-                      --port 8787
+It currently has two modes of exploration:
+- Enter a contract address, which will use the Etherscan API to resolve the collection metadata from the contract 
+- Enter a metadata url (e.g. https://ikzttp.mypinata.cloud/ipfs/QmQFkLSQysj94s5GvTHPyzTxrawwtjgiiYS2TBLgrvw8CW/0) to browse the collection directly
 
-You will then be able to browse your content via http://localhost:8787, assuming you used the same port as above. More information at https://sws.joseluisq.net/configuration/command-line-arguments/
+Finally, it can also be used to browse a local collection generated using [Nifty Generator](https://github.com/evilrobotindustries/nifty-generator). More information on how to get this running at [nifty-generator#exploration]( https://github.com/evilrobotindustries/nifty-generator#exploration).
+
