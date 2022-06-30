@@ -13,7 +13,7 @@ lto = true # link time optimization using using whole-program analysis
 async-recursion = "1.0.0"
 base64 = "0.13.0"
 ethabi = "17.0.0"
-etherscan = { path = "../../etherscan" }
+etherscan = { git = "https://github.com/evilrobotindustries/etherscan" }
 gloo-net = "0.2.0"
 gloo-worker = { version = "0.1.0", features = ["futures"] }
 gloo-timers = "0.2.4"
