@@ -3,11 +3,16 @@ name = "bulma"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[profile.release]
+panic = 'abort' # less code to include into binary
+codegen-units = 1 # optimization over all codebase ( better optimization, slower build )
+opt-level = 'z' # optimization for size ( more aggressive )
+lto = true # link time optimization using using whole-program analysis
 
 [dependencies]
 gloo-console = "0.2.1"
-wasm-bindgen = "0.2.80"
+serde = { version = "1.0.137", features = ["derive"] }
+wasm-bindgen = { version = "0.2.80", features = ["serde-serialize"] }
 web-sys = { version = "0.3.57", features = [
     "Document",
     "DomTokenList",

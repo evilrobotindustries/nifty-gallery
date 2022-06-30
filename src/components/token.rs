@@ -1,53 +1,185 @@
-use crate::components::token;
-use crate::uri::Uri;
-use gloo_console::{debug, error};
-use gloo_net::http::Request;
-use gloo_net::Error;
+use crate::models;
 use itertools::Itertools;
-use qrcode_generator::QrCodeEcc;
-use url::ParseError;
+use std::rc::Rc;
+use workers::{qr, Bridge, Bridged};
 use yew::prelude::*;
 
-#[derive(Debug)]
-pub enum Msg {
-    Request,
-    Redirect(String),
-    Completed(crate::metadata::Metadata),
-    Failed(String),
-    NotFound,
-}
-
-#[derive(PartialEq, Properties)]
-pub struct Props {
-    // The token uri
-    pub uri: String,
-    pub token: Option<usize>,
-    #[prop_or_default]
-    pub status: Callback<Status>,
-}
-
-pub enum Status {
-    NotStarted,
-    Requesting,
-    Completed,
-    NotFound,
-    Failed,
-}
-
 pub struct Token {
-    // The current location
-    location: String,
-    error: Option<String>,
-    metadata: Option<crate::metadata::Metadata>,
+    qr: Box<dyn Bridge<qr::Worker>>,
+    /// The qr code of the current url
+    qr_code: Option<String>,
 }
 
-impl Token {
-    fn attributes(&self) -> Html {
-        match &self.metadata {
-            None => {
-                html! {}
+#[derive(Debug)]
+pub enum Message {
+    // Qr Code
+    GenerateQRCode,
+    QRCode(String),
+}
+
+#[derive(Properties)]
+pub struct Properties {
+    pub token: Rc<models::Token>,
+}
+
+impl PartialEq for Properties {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.token, &other.token)
+    }
+}
+
+impl Component for Token {
+    type Message = Message;
+    type Properties = Properties;
+
+    fn create(ctx: &Context<Self>) -> Self {
+        ctx.link().send_message(Message::GenerateQRCode);
+
+        Self {
+            qr: qr::Worker::bridge(Rc::new({
+                let link = ctx.link().clone();
+                move |e: qr::Response| link.send_message(Self::Message::QRCode(e.qr_code))
+            })),
+            qr_code: None,
+        }
+    }
+
+    fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
+        match msg {
+            Message::GenerateQRCode => {
+                if let Some(location) = web_sys::window()
+                    .and_then(|window| window.document())
+                    .and_then(|document| document.location())
+                    .and_then(|location| location.href().ok())
+                {
+                    log::trace!("generating qr code...");
+                    self.qr.send(workers::qr::Request { url: location });
+                }
+                false
             }
-            Some(metadata) => {
+            Message::QRCode(qr_code) => {
+                log::trace!("qr code generated");
+                self.qr_code = Some(qr_code);
+                true
+            }
+        }
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Html {
+        let props = ctx.props();
+        let image_onload = Callback::from(move |e: web_sys::Event| {
+            if let Some(figure) = e
+                .target_unchecked_into::<web_sys::HtmlElement>()
+                .offset_parent()
+            {
+                let _ = figure.class_list().remove_1("is-square");
+            }
+        });
+
+        html! {
+            if let Some(metadata) = props.token.metadata.as_ref() {
+                <div class="card columns">
+                if let Some((video, poster)) = props.video() {
+                    <div class="column">
+                        <figure class="image">
+                            <video class="modal-button" data-target="nifty-image" controls={true}
+                                    poster={ poster.clone() }>
+                                <source src={ video.clone() } type="video/mp4" />
+                            </video>
+                        </figure>
+                        <div id="nifty-image" class="modal modal-fx-3dFlipHorizontal">
+                            <div class="modal-background"></div>
+                            <div class="modal-content">
+                                <p class="image">
+                                    <video class="modal-button" data-target="nifty-image" controls={true}
+                                            poster={ poster }>
+                                        <source src={ video } type="video/mp4" />
+                                    </video>
+                                </p>
+                            </div>
+                            <button class="modal-close is-large" aria-label="close"></button>
+                        </div>
+                    </div>
+                }
+                else {
+                    <div class="column">
+                        <figure class="image is-square">
+                            <img src={ metadata.image.clone() } alt={ metadata.name.clone() } class="modal-button"
+                                 data-target="nifty-image" onload={ image_onload.clone() } />
+                        </figure>
+                        <div id="nifty-image" class="modal modal-fx-3dFlipHorizontal">
+                            <div class="modal-background"></div>
+                            <div class="modal-content">
+                                <p class="image">
+                                    <img src={ metadata.image.clone() } alt={ metadata.name.clone() } />
+                                </p>
+                            </div>
+                            <button class="modal-close is-large" aria-label="close"></button>
+                        </div>
+                    </div>
+                }
+                    <div class="column">
+                        <div class="card-content">
+                            <h1 class="title nifty-name">{ props.name() }</h1>
+                            <div class="content">{ props.description() }</div>
+                            <div class="field is-grouped is-grouped-multiline">{ props.attributes() }</div>
+                            if let Some(external_url) = &metadata.external_url {
+                                <div class="content">
+                                    <a href={ external_url.to_string() } target="_blank">
+                                        <i class="fa-solid fa-globe"></i>
+                                    </a>
+                                </div>
+                            }
+                            <table class="table">
+                            <tbody>
+                            if let Some(last_viewed) = &props.token.last_viewed {
+                                <tr>
+                                    <th>{"Last viewed: "}</th>
+                                    <td>{ last_viewed }</td>
+                                </tr>
+                            }
+                            </tbody>
+                            </table>
+                        </div>
+                        <footer class="card-footer">
+                            <div class="card-content level is-mobile">
+                                <div class="level-left">
+                                    <div class="level-item has-text-centered">
+                                        <div>
+                                            <p class="heading">{"Traits"}</p>
+                                            <p class="title">{ props.total_attributes() }</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="level-right">
+                                    if let Some(qr_code) = self.qr_code.as_ref() {
+                                        <figure class="image is-qr-code level-item">
+                                            <img src={ qr_code.clone() } alt={ metadata.name.clone() } />
+                                        </figure>
+                                    }
+                                </div>
+                            </div>
+                        </footer>
+                    </div>
+                </div>
+            }
+        }
+    }
+
+    fn rendered(&mut self, _ctx: &Context<Self>, _first_render: bool) {
+        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+            // Wire up full screen image modal
+            bulma::add_modals(&document);
+        }
+    }
+}
+
+impl Properties {
+    fn attributes(&self) -> Html {
+        self.token
+            .metadata
+            .as_ref()
+            .map_or(Html::default(), |metadata| {
                 let attributes: Vec<(String, String)> =
                     metadata.attributes.iter().map(|a| a.map()).collect();
 
@@ -65,12 +197,22 @@ impl Token {
                         }
                     })
                     .collect()
-            }
-        }
+            })
+    }
+
+    fn total_attributes(&self) -> usize {
+        self.token.metadata.as_ref().map_or(0, |metadata| {
+            metadata
+                .attributes
+                .iter()
+                .map(|a| a.map())
+                .filter(|a| a.1 != "None")
+                .count()
+        })
     }
 
     fn description(&self) -> &str {
-        self.metadata.as_ref().map_or("", |metadata| {
+        self.token.metadata.as_ref().map_or("", |metadata| {
             metadata
                 .description
                 .as_ref()
@@ -78,299 +220,25 @@ impl Token {
         })
     }
 
-    fn image(&self, ctx: &Context<Token>) -> Option<String> {
-        match &self.metadata {
-            None => None,
-            Some(metadata) => match Uri::parse(&metadata.image, false) {
-                Ok(uri) => Some(uri.to_string().into()),
-                Err(e) => match e {
-                    ParseError::RelativeUrlWithoutBase => {
-                        match Uri::parse(&ctx.props().uri, false) {
-                            Ok(uri) => Some(uri.join(&metadata.image).to_string().into()),
-                            Err(e) => {
-                                error!(format!("{:?}", e));
-                                None
-                            }
-                        }
-                    }
-                    _ => {
-                        error!(format!("{:?}", e));
-                        None
-                    }
-                },
-            },
-        }
+    fn name(&self) -> String {
+        self.token
+            .metadata
+            .as_ref()
+            .map_or("".to_string(), |metadata| {
+                metadata
+                    .name
+                    .as_ref()
+                    .map_or(self.token.id.to_string(), |name| name.to_string())
+            })
     }
 
-    fn name(&self, ctx: &Context<Token>) -> String {
-        self.metadata.as_ref().map_or("".to_string(), |metadata| {
-            metadata.name.as_ref().map_or(
-                // Use token number for missing name (if available)
-                ctx.props()
-                    .token
-                    .map_or("".to_string(), |token| token.to_string()),
-                |name| name.to_string(),
-            )
-        })
-    }
-
-    fn qr_code(&self) -> Option<String> {
-        match qrcode_generator::to_png_to_vec(&self.location, QrCodeEcc::Low, 128) {
-            Ok(qr_code) => Some(format!("data:image/png;base64,{}", base64::encode(qr_code))),
-            Err(_) => None,
-        }
-    }
-
-    fn traits(&self) -> usize {
-        match &self.metadata {
-            None => 0,
-            Some(metadata) => metadata
-                .attributes
-                .iter()
-                .map(|a| a.map())
-                .filter(|a| a.1 != "None")
-                .count(),
-        }
-    }
-
-    fn video(&self, ctx: &Context<Token>) -> Option<(String, String)> {
-        let poster = self.image(ctx).unwrap_or("".to_string());
-        match &self.metadata {
-            None => None,
-            Some(metadata) => match &metadata.animation_url {
+    fn video(&self) -> Option<(String, String)> {
+        self.token
+            .metadata
+            .as_ref()
+            .map_or(None, |metadata| match &metadata.animation_url {
                 None => None,
-                Some(animation_url) => match Uri::parse(animation_url, false) {
-                    Ok(uri) => Some((uri.to_string().into(), poster)),
-                    Err(e) => match e {
-                        ParseError::RelativeUrlWithoutBase => {
-                            match Uri::parse(&ctx.props().uri, false) {
-                                Ok(uri) => {
-                                    Some((uri.join(&animation_url).to_string().into(), poster))
-                                }
-                                Err(e) => {
-                                    error!(format!("{:?}", e));
-                                    None
-                                }
-                            }
-                        }
-                        _ => {
-                            error!(format!("{:?}", e));
-                            None
-                        }
-                    },
-                },
-            },
-        }
-    }
-}
-
-impl Component for Token {
-    type Message = Msg;
-    type Properties = Props;
-
-    fn create(_ctx: &Context<Self>) -> Self {
-        let window = web_sys::window().expect("global window does not exists");
-        let document = window.document().expect("expecting a document on window");
-        let location = document
-            .location()
-            .expect("could not get document location")
-            .href()
-            .expect("could not get document location href as string");
-
-        _ctx.link().send_message(Msg::Request);
-
-        Self {
-            error: None,
-            metadata: None,
-            location,
-        }
-    }
-
-    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
-        match msg {
-            Msg::Request => {
-                let uri = ctx.props().uri.clone();
-                ctx.link()
-                    .send_future(async move { token::request_metadata(&uri).await });
-                self.error = None;
-                ctx.props().status.emit(Status::Requesting);
-                true
-            }
-            Msg::Redirect(uri) => {
-                ctx.link()
-                    .send_future(async move { token::request_metadata(&uri).await });
-                self.error = None;
-                ctx.props().status.emit(Status::Requesting);
-                true
-            }
-            Msg::Completed(metadata) => {
-                ctx.props().status.emit(Status::Completed);
-                self.metadata = Some(metadata);
-                true
-            }
-            Msg::Failed(error) => {
-                ctx.props().status.emit(Status::Failed);
-                self.error = Some(error);
-                true
-            }
-            Msg::NotFound => {
-                ctx.props().status.emit(Status::NotFound);
-                self.metadata = None;
-                true
-            }
-        }
-    }
-
-    fn changed(&mut self, ctx: &Context<Self>) -> bool {
-        ctx.link().send_message(Msg::Request);
-        true
-    }
-
-    fn view(&self, ctx: &Context<Self>) -> Html {
-        html! {
-            <>
-                if let Some(error) = &self.error {
-                    <div class="notification is-danger">
-                      { error }
-                    </div>
-                }
-
-                if let Some(metadata) = self.metadata.as_ref() {
-                    <div class="card columns">
-                        if let Some((video, poster)) = self.video(ctx) {
-                            <div class="column">
-                                <figure class="image">
-                                    <video class="modal-button" data-target="nifty-image" controls={true}
-                                            poster={ poster.clone() }>
-                                        <source src={ video.clone() } type="video/mp4" />
-                                    </video>
-                                </figure>
-                                <div id="nifty-image" class="modal modal-fx-3dFlipHorizontal">
-                                    <div class="modal-background"></div>
-                                    <div class="modal-content">
-                                        <p class="image">
-                                            <video class="modal-button" data-target="nifty-image" controls={true}
-                                                    poster={ poster }>
-                                                <source src={ video } type="video/mp4" />
-                                            </video>
-                                        </p>
-                                    </div>
-                                    <button class="modal-close is-large" aria-label="close"></button>
-                                </div>
-                            </div>
-                        }
-                        else if let Some(image) = self.image(ctx) {
-                            <div class="column">
-                                <figure class="image">
-                                    <img src={ image.clone() } alt={ metadata.name.clone() } class="modal-button"
-                                         data-target="nifty-image" />
-                                </figure>
-                                <div id="nifty-image" class="modal modal-fx-3dFlipHorizontal">
-                                    <div class="modal-background"></div>
-                                    <div class="modal-content">
-                                        <p class="image">
-                                            <img src={ image } alt={ metadata.name.clone() } />
-                                        </p>
-                                    </div>
-                                    <button class="modal-close is-large" aria-label="close"></button>
-                                </div>
-                            </div>
-                        }
-                        <div class="column">
-                            <div class="card-content">
-                                <h1 class="title">{ self.name(ctx) }</h1>
-                                <div class="content">{ self.description() }</div>
-                                <div class="field is-grouped is-grouped-multiline">{ self.attributes() }</div>
-                                if let Some(external_url) = &metadata.external_url {
-                                    <div class="content">
-                                        <a href={ external_url.to_string() } target="_blank">
-                                            <i class="fa-solid fa-up-right-from-square"></i>
-                                        </a>
-                                    </div>
-                                }
-                            </div>
-                            <footer class="card-footer">
-                                <div class="card-content level is-mobile">
-                                    <div class="level-left">
-                                        <div class="level-item has-text-centered">
-                                            <div>
-                                                <p class="heading">{"Traits"}</p>
-                                                <p class="title">{ self.traits() }</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="level-right">
-                                        if let Some(qr_code) = self.qr_code() {
-                                            <figure class="image is-qr-code level-item">
-                                                <img src={ qr_code } alt={ metadata.name.clone() } />
-                                            </figure>
-                                        }
-                                    </div>
-                                </div>
-                            </footer>
-                        </div>
-                    </div>
-                }
-            </>
-        }
-    }
-
-    fn rendered(&mut self, _ctx: &Context<Self>, _first_render: bool) {
-        // Wire up full screen image modal
-        let window = web_sys::window().expect("global window does not exists");
-        let document = window.document().expect("expecting a document on window");
-        bulma::add_modals(&document);
-    }
-}
-
-async fn request_metadata(uri: &str) -> Msg {
-    match Request::get(uri).send().await {
-        Ok(response) => match response.status() {
-            200 => {
-                // Read response as text to handle empty result
-                match response.text().await {
-                    Ok(response) => {
-                        if response.len() == 0 {
-                            return Msg::NotFound;
-                        }
-
-                        match serde_json::from_str::<crate::metadata::Metadata>(&response) {
-                            Ok(metadata) => Msg::Completed(metadata),
-                            Err(e) => {
-                                debug!(format!("{:?}", response));
-                                error!(format!("{:?}", e));
-                                Msg::Failed("An error occurred parsing the metadata".to_string())
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!(format!("{:?}", e));
-                        Msg::Failed("An error occurred reading the response".to_string())
-                    }
-                }
-            }
-            302 => match response.headers().get("location") {
-                Some(uri) => Msg::Redirect(uri),
-                None => {
-                    Msg::Failed("Received 302 Found but location header not present".to_string())
-                }
-            },
-            404 => Msg::NotFound,
-            _ => Msg::Failed(format!(
-                "Request failed: {} {}",
-                response.status(),
-                response.status_text()
-            )),
-        },
-        Err(e) => {
-            match e {
-                Error::JsError(e) => {
-                    // Attempt to get status code
-                    error!(format!("{:?}", e));
-                    Msg::Failed(format!("Requesting metadata from {uri} failed: {e}"))
-                }
-                _ => Msg::Failed(format!("Requesting metadata from {uri} failed: {e}")),
-            }
-        }
+                Some(animation_url) => Some((animation_url.clone(), metadata.image.clone())),
+            })
     }
 }
