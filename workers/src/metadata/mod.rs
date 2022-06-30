@@ -287,32 +287,23 @@ impl Uri {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Metadata {
     // Name of the item.
-    #[serde(rename = "n")]
     pub name: Option<String>,
     // A human readable description of the item. Markdown is supported.
-    #[serde(rename = "d")]
     pub description: Option<String>,
     /// This is the URL to the image of the item. Can be just about any type of image (including SVGs, which will be cached into PNGs by OpenSea), and can be IPFS URLs or paths. We recommend using a 350 x 350 image.
-    #[serde(rename = "i")]
     pub image: String,
     // This is the URL that will appear below the asset's image on OpenSea and will allow users to leave OpenSea and view the item on your site.
-    #[serde(rename = "eu")]
     pub external_url: Option<String>,
     // These are the attributes for the item, which will show up on the OpenSea page for the item. (see below)
-    #[serde(rename = "a")]
     pub attributes: Vec<Attribute>,
     // Background color of the item on OpenSea. Must be a six-character hexadecimal without a pre-pended #.
-    #[serde(rename = "bc")]
     pub background_color: Option<String>,
     //
-    #[serde(rename = "cb")]
     pub created_by: Option<String>,
     // A URL to a multi-media attachment for the item. The file extensions GLTF, GLB, WEBM, MP4, M4V, OGV, and OGG are supported, along with the audio-only extensions MP3, WAV, and OGA.
     // Animation_url also supports HTML pages, allowing you to build rich experiences and interactive NFTs using JavaScript canvas, WebGL, and more. Scripts and relative paths within the HTML page are now supported. However, access to browser extensions is not supported.
-    #[serde(rename = "au")]
     pub animation_url: Option<String>,
     // A URL to a YouTube video.
-    #[serde(rename = "yu")]
     pub youtube_url: Option<String>,
 }
 
@@ -335,42 +326,29 @@ impl From<json::Metadata> for Metadata {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Attribute {
     String {
-        #[serde(rename = "tt")]
         trait_type: String,
-        #[serde(rename = "v")]
         value: String,
     },
     // Numeric
     Number {
-        #[serde(rename = "tt")]
         trait_type: String,
-        #[serde(rename = "v")]
         value: i64,
-        #[serde(rename = "mv")]
         max_value: Option<usize>,
     },
     BoostPercentage {
-        #[serde(rename = "tt")]
         trait_type: String,
-        #[serde(rename = "v")]
         value: f64,
-        #[serde(rename = "mv")]
         max_value: Option<usize>,
     },
     BoostNumber {
-        #[serde(rename = "tt")]
         trait_type: String,
-        #[serde(rename = "v")]
         value: f64,
-        #[serde(rename = "mv")]
         max_value: Option<usize>,
     },
     // Date
     Date {
-        #[serde(rename = "tt")]
         trait_type: String,
         // A unix timestamp (seconds)
-        #[serde(rename = "v")]
         value: u64,
     },
 }

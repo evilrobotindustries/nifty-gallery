@@ -138,13 +138,10 @@ impl Collection {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Token {
-    #[serde(rename = "i")]
     pub id: u32,
-    #[serde(rename = "m")]
     pub metadata: Option<Metadata>,
-    #[serde(rename = "lv")]
     pub last_viewed: Option<DateTime<Utc>>,
 }
 

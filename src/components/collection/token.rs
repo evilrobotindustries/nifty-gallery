@@ -1,3 +1,4 @@
+use crate::components::collection::Collection;
 use crate::storage::RecentlyViewedItem;
 use crate::{
     components::token, models, notifications, notifications::Color, storage, storage::Get, uri,
@@ -58,7 +59,11 @@ impl Component for Token {
 
     fn create(ctx: &Context<Self>) -> Self {
         let mut collection = storage::Collection::get(ctx.props().collection.as_str());
-        let token = storage::Token::get(ctx.props().collection.as_str(), ctx.props().token);
+        let token = storage::Token::get(
+            ctx.props().collection.as_str(),
+            Collection::calculate_page(ctx.props().token),
+            ctx.props().token,
+        );
 
         match collection.as_ref() {
             None => {
@@ -316,7 +321,11 @@ impl Component for Token {
             Message::RequestMetadata(token) => {
                 // Check if token already exists
                 log::trace!("checking if token {token} already exists locally...");
-                match storage::Token::get(ctx.props().collection.as_str(), token) {
+                match storage::Token::get(
+                    ctx.props().collection.as_str(),
+                    Collection::calculate_page(token),
+                    token,
+                ) {
                     None => {
                         if let Some(url) = self.collection.as_ref().and_then(|c| c.url(token)) {
                             if !self.notified_requesting_metadata {
@@ -389,9 +398,13 @@ impl Component for Token {
                 ));
 
                 // Initialise token
-                let token = models::Token::new(token, metadata);
-                storage::Token::store(ctx.props().collection.as_str(), token.clone());
-                self.token = Some(token);
+                let current_token = models::Token::new(token, metadata);
+                storage::Token::store(
+                    ctx.props().collection.as_str(),
+                    Collection::calculate_page(token),
+                    current_token.clone(),
+                );
+                self.token = Some(current_token);
                 self.working = false;
                 true
             }
@@ -438,7 +451,11 @@ impl Component for Token {
     }
 
     fn changed(&mut self, ctx: &Context<Self>) -> bool {
-        match storage::Token::get(ctx.props().collection.as_str(), ctx.props().token) {
+        match storage::Token::get(
+            ctx.props().collection.as_str(),
+            Collection::calculate_page(ctx.props().token),
+            ctx.props().token,
+        ) {
             None => {
                 log::trace!("token changed, requesting metadata...");
                 ctx.link()

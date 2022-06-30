@@ -208,7 +208,7 @@ pub fn recently_viewed() -> yew::Html {
         );
         || {}
     });
-    let slides: Option<Vec<Html>> = storage::RecentlyViewed::values().map_or(None, |recent| {
+    let slides: Option<Vec<Html>> = storage::RecentlyViewed::get().map_or(None, |recent| {
         Some(
             recent
                 .into_iter()

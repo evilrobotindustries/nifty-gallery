@@ -20,7 +20,6 @@ pub struct Collection {
     notified_indexing: bool,
     indexed: usize,
     page: usize,
-    page_size: usize,
     working: bool,
 }
 
@@ -142,7 +141,7 @@ impl Component for Collection {
                 }
 
                 // Initialise first page
-                ctx.link().send_message(Message::Page(1));
+                ctx.link().send_message(Message::Page(0));
 
                 // Update last viewed on collection and store
                 collection.set_last_viewed();
@@ -189,8 +188,7 @@ impl Component for Collection {
             tokens: Vec::new(),
             notified_indexing: false,
             indexed: 0,
-            page: 1,
-            page_size: 25,
+            page: 0,
             working: false,
         }
     }
@@ -373,7 +371,11 @@ impl Component for Collection {
                 } else {
                     if let Some(collection) = self.collection.as_ref() {
                         // Check if token already exists within storage
-                        if let Some(_token) = storage::Token::get(collection.id().as_str(), token) {
+                        if let Some(_token) = storage::Token::get(
+                            collection.id().as_str(),
+                            Collection::calculate_page(token),
+                            token,
+                        ) {
                             // Request next token
                             ctx.link().send_message(Message::RequestMetadata(token + 1));
                         }
@@ -454,10 +456,7 @@ impl Component for Collection {
                 self.page = page;
 
                 if let Some(collection) = self.collection.as_ref() {
-                    let (page, total) =
-                        storage::Token::page(collection.id().as_str(), page - 1, self.page_size);
-                    self.tokens = page;
-                    self.indexed = total;
+                    self.tokens = storage::Token::page(collection.id().as_str(), page);
                 }
 
                 true
@@ -530,7 +529,7 @@ impl Component for Collection {
                             </div>
                         </div>
                         <div class="column">
-                            <Navigate { page } page_size={ self.page_size } items={ self.indexed }
+                            <Navigate { page } page_size={ Collection::PAGE_SIZE } items={ self.indexed }
                                 previous={ previous_page.clone() } next={ next_page.clone() } />
                         </div>
                     </div>
@@ -558,6 +557,8 @@ impl Component for Collection {
 }
 
 impl Collection {
+    const PAGE_SIZE: usize = 25;
+
     pub fn add(&mut self, id: u32, mut metadata: Metadata) {
         // Parse urls
         metadata.image = uri::parse(&metadata.image).map_or(metadata.image, |url| url.to_string());
@@ -573,14 +574,22 @@ impl Collection {
                 last_viewed: None,
             };
 
-            self.indexed = storage::Token::store(collection.id().as_str(), token.clone());
+            self.indexed = storage::Token::store(
+                collection.id().as_str(),
+                Collection::calculate_page(token.id),
+                token.clone(),
+            );
 
-            let page_start = ((self.page - 1) * self.page_size) as u32 + *collection.start_token();
-            let page_end = page_start + self.page_size as u32;
+            let page_start = (self.page * Collection::PAGE_SIZE) as u32 + *collection.start_token();
+            let page_end = page_start + Collection::PAGE_SIZE as u32;
             if token.id >= page_start && token.id < page_end {
                 self.tokens.push(token);
             }
         }
+    }
+
+    pub fn calculate_page(token: u32) -> usize {
+        (token as f32 / Self::PAGE_SIZE as f32) as usize
     }
 }
 
